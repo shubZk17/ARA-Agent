@@ -456,7 +456,7 @@ Scores also decay over time — a stock price from last week is less reliable th
 
 ## 📜 License
 
-This project is for educational and research purposes. See [LICENSE](LICENSE) for details.
+This project is for educational and research purposes. 
 
 ---
 
