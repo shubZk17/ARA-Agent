@@ -1,0 +1,49 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs (keep structure, ignore content)
+logs/*.log
+logs/*.jsonl
+
+# Data & Database Cache (local only)
+data/chroma/
+data/episodic/
+data/checkpoints/
+data/evaluations/
+data/telemetry/
+data/benchmarks/
+data/failures/
+
+# Reports (locally generated)
+reports/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development Documentation & Plans
+*walkthrough.md
+*implementation_plan.md
+ARA-1_Submission_Report.md
+
+# Local Test Scripts
+test_*.py
+
+
