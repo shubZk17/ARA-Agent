@@ -209,7 +209,7 @@ class RetryHandler:
 
                 # Record successful retry
                 if self._collector and attempt > 1:
-                    from observability.collector import EventType
+                    from quality.observability.collector import EventType
                     self._collector.record_event(
                         EventType.RETRY,
                         operation_name,
@@ -228,7 +228,7 @@ class RetryHandler:
 
                 # Record retry event
                 if self._collector:
-                    from observability.collector import EventType
+                    from quality.observability.collector import EventType
                     self._collector.record_event(
                         EventType.RETRY,
                         operation_name,
@@ -316,7 +316,7 @@ class RetryHandler:
                             f"Fallback successful: using {provider.name}"
                         )
                         if self._collector:
-                            from observability.collector import EventType
+                            from quality.observability.collector import EventType
                             self._collector.record_event(
                                 EventType.FALLBACK,
                                 f"fallback_to_{provider.name}",

@@ -51,24 +51,32 @@ ARA-1 is built on a **layered modular architecture** with clean separation of co
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                     CLI / main.py                       │  ← Entry Point
+│              main.py  ·  app.py  ·  api/                │  ← Entry points
 ├─────────────────────────────────────────────────────────┤
-│              LangGraph StateGraph (agent/)              │  ← Orchestration
+│              LangGraph StateGraph (agent/)              │  ← The ReAct loop
 │         reasoning_node → tool_node → output_node        │
-├──────────────────┬──────────────────┬───────────────────┤
-│   Tool Layer     │  Retrieval Layer │  Memory Layer     │
-│   (tools/)       │  (retrieval/)    │  (memory/)        │
-│                  │  (ingestion/)    │                   │
-│  • stock_price   │  • vector_store  │  • short_term     │
-│  • company_info  │  • embeddings    │  • long_term      │
-│  • fin. metrics  │  • retriever     │  • episodic       │
-│  • news          │  • chunker       │                   │
-├──────────────────┴──────────────────┴───────────────────┤
-│              Evidence Governance (reliability/)          │
-│         scorer · tiers · conflict_resolver               │
+│         + state · prompts · react_parser                │
+├──────────────────────────┬──────────────────────────────┤
+│      Tool Layer          │      knowledge/              │
+│      (tools/)            │                              │
+│                          │  ingestion/   clean·chunk    │
+│  • stock_price           │  retrieval/   store·search   │
+│  • company_info          │  memory/      episodic       │
+│  • financial_metrics     │  reliability/ tiers·staleness│
+│  • news                  │               ·conflicts     │
+├──────────────────────────┴──────────────────────────────┤
+│                       analysis/                         │  ← Evidence → thesis
+│   financial → sentiment → misalignment → risk →         │
+│   confidence → report                                   │
 ├─────────────────────────────────────────────────────────┤
-│   parsers/  │  prompts/  │  config/  │  utils/logger    │  ← Support
+│                       quality/                          │  ← Observes only,
+│   evaluation/ · observability/ · dashboard              │    never blocks a run
+├─────────────────────────────────────────────────────────┤
+│              config/  ·  utils/logger                   │  ← Support
 └─────────────────────────────────────────────────────────┘
+
+Data flows top to bottom. The graph only covers the ReAct loop —
+analysis/ runs after it completes, on the finished state.
 ```
 
 ---
@@ -223,66 +231,76 @@ python main.py "Provide a comprehensive analysis of Microsoft (MSFT)"
 ```
 ARA-1/
 │
-├── agent/                    # 🧠 Core Agent Logic
-│   ├── state.py              #    TypedDict state + Phase 2 memory fields
-│   ├── graph.py              #    LangGraph StateGraph definition
-│   └── nodes.py              #    ReAct nodes: reasoning, tool, output
+├── main.py                   # 🚀 CLI entry point & system assembly
+├── app.py                    # 🖥️  Streamlit UI (the Hugging Face Space)
 │
-├── tools/                    # 🔧 Financial Data Tools
-│   ├── base.py               #    Abstract BaseTool interface
-│   ├── registry.py           #    Dynamic tool registry
-│   ├── stock_price.py        #    Real-time stock price (yfinance)
-│   ├── company_info.py       #    Company profile & overview
-│   ├── financial_metrics.py  #    P/E, EPS, margins, ratios
-│   └── news.py               #    Recent financial news
+├── agent/                    # 🧠 The reasoning loop
+│   ├── state.py              #    AgentState — the single source of truth
+│   ├── graph.py              #    LangGraph wiring: 3 nodes, 1 loop
+│   ├── nodes.py              #    reasoning → tool → output
+│   ├── prompts.py            #    System prompt template + builders
+│   ├── react_parser.py       #    LLM text → structured action (5 fallbacks)
+│   ├── retry_handler.py      #    ⚠️ built, not wired
+│   └── checkpoint_manager.py #    ⚠️ built, not wired
 │
-├── retrieval/                # 🔍 Semantic Retrieval (Phase 2)
-│   ├── schemas.py            #    Document, Chunk, Evidence data models
-│   ├── vector_store.py       #    ChromaDB abstraction layer
-│   ├── embeddings.py         #    OpenAI embedding pipeline + fallback
-│   └── retriever.py          #    Semantic search orchestrator
+├── tools/                    # 🔧 Where all external data enters
+│   ├── base.py               #    BaseTool — subclass this to add one
+│   ├── registry.py           #    Register in main.py, that's the whole step
+│   ├── stock_price.py        #    Price, day range, 52w range, volume
+│   ├── company_info.py       #    Sector, industry, HQ, headcount
+│   ├── financial_metrics.py  #    P/E, margins, ROE, growth, leverage
+│   └── news.py               #    Recent headlines
 │
-├── ingestion/                # 📥 Document Ingestion Pipeline (Phase 2)
-│   ├── pipeline.py           #    Clean → Chunk → Embed → Store
-│   ├── chunker.py            #    Recursive text splitting with overlap
-│   ├── cleaners.py           #    HTML/Unicode/financial text cleaning
-│   └── loaders.py            #    Source-type document loaders
+├── knowledge/                # 📚 What the agent knows and how it recalls it
+│   ├── ingestion/            #    Text in:  clean → chunk → embed → store
+│   ├── retrieval/            #    Text out: vector store + semantic search
+│   ├── memory/               #    What survives across runs (episodic.py)
+│   └── reliability/          #    Source tiers, staleness, conflict detection
 │
-├── memory/                   # 🗂️ Memory Layer (Phase 2)
-│   ├── base.py               #    Abstract memory interface
-│   ├── short_term.py         #    In-session context memory
-│   ├── long_term.py          #    Persistent vector-backed memory
-│   └── episodic.py           #    Run experience storage (JSON)
+├── analysis/                 # 📊 Turning evidence into a thesis
+│   ├── engine.py             #    Orchestrates the 6 stages below
+│   ├── financial_engine.py   #    1. Score ~22 metrics against thresholds
+│   ├── sentiment_analyzer.py #    2. Lexicon-based news sentiment
+│   ├── misalignment_detector.py #  3. Does the story match the numbers?
+│   ├── risk_analyzer.py      #    4. Valuation, leverage, volatility risks
+│   ├── confidence_calibrator.py #  5. How much should we trust this?
+│   ├── report_generator.py   #    6. Render Markdown + PDF
+│   └── schemas.py            #    Pydantic models tying it together
 │
-├── reliability/              # 🛡️ Evidence Governance (Phase 2)
-│   ├── tiers.py              #    Source reliability tier definitions
-│   ├── scorer.py             #    Reliability scoring + staleness decay
-│   └── conflict_resolver.py  #    Contradiction detection engine
+├── quality/                  # 🔬 Did it do a good job? Can we see how?
+│   ├── evaluation/           #    22 metrics + hallucination detection
+│   ├── observability/        #    ⚠️ built, zero instrumentation call sites
+│   └── dashboard.py          #    Read-only Streamlit monitor
 │
-├── parsers/
-│   └── react_parser.py       # 🔄 LLM response → structured JSON parser
+├── api/server.py             # 🌐 FastAPI wrapper (POST /analyze)
+├── config/settings.py        # ⚙️  Frozen settings singleton, reads .env
+├── utils/logger.py           # 📋 Rich console + per-session file logging
 │
-├── prompts/
-│   └── system.py             # 📝 Dynamic system prompt templates
+├── data/                     # 💾 Runtime state (gitignored)
+│   ├── chroma/               #    Vector database
+│   ├── episodic/             #    One JSON per past run
+│   └── evaluations/          #    Evaluation output
+├── reports/                  # 📄 Generated analysis reports
+├── logs/                     # 📄 Per-session logs
 │
-├── config/
-│   └── settings.py           # ⚙️ Centralized configuration management
-│
-├── utils/
-│   └── logger.py             # 📋 Rich console + file logging
-│
-├── data/                     # 💾 Persistent Storage
-│   ├── chroma/               #    ChromaDB vector database files
-│   └── episodic/             #    Episodic memory JSON files
-│
-├── logs/                     # 📄 Session log files
-├── docs/                     # 📖 Documentation assets
-│
-├── main.py                   # 🚀 Entry point & system assembly
-├── requirements.txt          # 📦 Python dependencies
-├── .env.example              # 🔑 Environment template
-└── .gitignore                # 🚫 Git exclusions
+├── CLAUDE.md                 # 🧭 Architecture notes + known defects
+├── plan.md                   # 🗺️  Roadmap (Phases 5–8)
+├── requirements.txt
+└── .env.example
 ```
+
+### Where to start reading
+
+Follow the data, in this order:
+
+1. **`main.py`** — the assembly point. Everything is wired here and nowhere else.
+2. **`agent/state.py`** — `AgentState` is what flows between every node. Read this before any node.
+3. **`agent/graph.py`** — 3 nodes and one loop. Small file, whole control flow.
+4. **`agent/nodes.py`** — where reasoning and tool execution actually happen.
+5. **`tools/stock_price.py`** — the simplest tool; the shape all others follow.
+6. **`analysis/engine.py`** — the 6-stage synthesis pipeline.
+
+> **One thing that surprises everyone:** synthesis is **not** part of the graph. The graph is only the ReAct loop. `main.py` runs it to completion, then hands the finished state to `analysis/engine.py` as a separate step.
 
 ---
 

@@ -204,7 +204,7 @@ async def run_analysis(request: AnalysisRequest):
         # Run evaluation if requested
         if request.enable_evaluation:
             try:
-                from evaluation.evaluator import SystemEvaluator
+                from quality.evaluation.evaluator import SystemEvaluator
                 evaluator = SystemEvaluator()
                 eval_report = evaluator.evaluate(
                     agent_state=final_state,
@@ -230,7 +230,7 @@ async def run_evaluation(request: AnalysisRequest):
     """
     try:
         from main import run_agent, initialize_phase2_systems
-        from evaluation.evaluator import SystemEvaluator
+        from quality.evaluation.evaluator import SystemEvaluator
 
         # Initialize
         global _phase2_components
