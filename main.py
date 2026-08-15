@@ -140,7 +140,7 @@ def initialize_phase2_systems():
 
     try:
         # 1. Vector Store
-        from retrieval.vector_store import create_vector_store
+        from knowledge.retrieval.vector_store import create_vector_store
         vector_store = create_vector_store(
             backend=settings.vector_backend,
             collection_name=settings.vector_collection_name,
@@ -149,7 +149,7 @@ def initialize_phase2_systems():
         components["vector_store"] = vector_store
 
         # 2. Embedding Pipeline
-        from retrieval.embeddings import EmbeddingPipeline
+        from knowledge.retrieval.embeddings import EmbeddingPipeline
         embedding_pipeline = EmbeddingPipeline(
             model=settings.embedding_model,
             api_key=settings.embedding_api_key,
@@ -157,7 +157,7 @@ def initialize_phase2_systems():
         components["embedding_pipeline"] = embedding_pipeline
 
         # 3. Ingestion Pipeline
-        from ingestion.pipeline import IngestionPipeline
+        from knowledge.ingestion.pipeline import IngestionPipeline
         ingestion_pipeline = IngestionPipeline(
             vector_store=vector_store,
             embedding_pipeline=embedding_pipeline,
@@ -165,17 +165,17 @@ def initialize_phase2_systems():
         components["ingestion_pipeline"] = ingestion_pipeline
 
         # 4. Reliability Scorer
-        from reliability.scorer import ReliabilityScorer
+        from knowledge.reliability.scorer import ReliabilityScorer
         reliability_scorer = ReliabilityScorer()
         components["reliability_scorer"] = reliability_scorer
 
         # 5. Conflict Resolver
-        from reliability.conflict_resolver import ConflictResolver
+        from knowledge.reliability.conflict_resolver import ConflictResolver
         conflict_resolver = ConflictResolver()
         components["conflict_resolver"] = conflict_resolver
 
         # 6. Semantic Retriever
-        from retrieval.retriever import SemanticRetriever
+        from knowledge.retrieval.retriever import SemanticRetriever
         semantic_retriever = SemanticRetriever(
             vector_store=vector_store,
             embedding_pipeline=embedding_pipeline,
@@ -185,7 +185,7 @@ def initialize_phase2_systems():
         components["semantic_retriever"] = semantic_retriever
 
         # 7. Episodic Memory
-        from memory.episodic import EpisodicMemory
+        from knowledge.memory.episodic import EpisodicMemory
         episodic_memory = EpisodicMemory(
             storage_dir=str(settings.episodic_memory_dir),
         )
@@ -406,12 +406,12 @@ def initialize_phase4_systems() -> dict:
 
     try:
         # 1. Telemetry Collector
-        from observability.collector import TelemetryCollector
+        from quality.observability.collector import TelemetryCollector
         collector = TelemetryCollector()
         components["collector"] = collector
 
         # 2. Execution Tracer
-        from observability.tracer import ExecutionTracer
+        from quality.observability.tracer import ExecutionTracer
         tracer = ExecutionTracer(run_id=collector.run_id)
         components["tracer"] = tracer
 
@@ -439,22 +439,15 @@ def initialize_phase4_systems() -> dict:
 
         # 5. System Evaluator
         if settings.enable_evaluation:
-            from evaluation.evaluator import SystemEvaluator
+            from quality.evaluation.evaluator import SystemEvaluator
             evaluator = SystemEvaluator()
             components["evaluator"] = evaluator
-
-        # 6. Failure Injector (only if explicitly enabled)
-        if settings.enable_failure_injection:
-            from evaluation.failure_injector import FailureInjector
-            injector = FailureInjector(collector=collector)
-            components["failure_injector"] = injector
 
         console.print("[green][OK][/green] Phase 4 systems initialized:")
         console.print(f"     [cyan]Telemetry:[/cyan] collector + tracer active")
         console.print(f"     [cyan]Checkpoints:[/cyan] {'enabled' if settings.enable_checkpoints else 'disabled'}")
         console.print(f"     [cyan]Retry/Fallback:[/cyan] max {settings.max_retries} retries")
         console.print(f"     [cyan]Evaluation:[/cyan] {'enabled' if settings.enable_evaluation else 'disabled'}")
-        console.print(f"     [cyan]Failure Injection:[/cyan] {'ACTIVE' if settings.enable_failure_injection else 'disabled'}")
 
     except Exception as e:
         logger.warning(f"Phase 4 initialization failed (non-fatal): {e}")
@@ -529,7 +522,7 @@ def run_phase4_evaluation(
 
 def _display_evaluation_results(eval_report) -> None:
     """Display Phase 4 evaluation results to the console."""
-    from evaluation.metrics import MetricStatus
+    from quality.evaluation.metrics import MetricStatus
 
     # Overall score panel
     score = eval_report.overall_score
@@ -587,7 +580,7 @@ def _display_evaluation_results(eval_report) -> None:
 def _save_episode(episodic_memory, query: str, state: dict, elapsed: float):
     """Save the current run as an episode in episodic memory."""
     try:
-        from memory.episodic import Episode
+        from knowledge.memory.episodic import Episode
 
         tool_calls = state.get("tool_calls", [])
         tools_used = [
@@ -646,8 +639,8 @@ def initialize_phase3_systems() -> dict:
     components = {}
 
     try:
-        from synthesis.engine import SynthesisEngine
-        from synthesis.report_generator import ReportGenerator
+        from analysis.engine import SynthesisEngine
+        from analysis.report_generator import ReportGenerator
 
         synthesis_engine = SynthesisEngine()
         components["synthesis_engine"] = synthesis_engine
@@ -715,7 +708,7 @@ def run_phase3_synthesis(final_state: dict, phase3_components: dict) -> None:
 
 def _display_synthesis_results(report, paths: dict) -> None:
     """Display Phase 3 synthesis results to the console."""
-    from synthesis.schemas import InvestmentOutlook, RiskSeverity
+    from analysis.schemas import InvestmentOutlook, RiskSeverity
 
     # Investment Outlook
     outlook_colors = {

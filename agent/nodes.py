@@ -49,8 +49,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.state import AgentState, AgentStatus, ReasoningStep, ToolCall
 from config.settings import settings
-from parsers.react_parser import parse_react_response
-from prompts.system import build_observation_message, build_system_prompt
+from agent.react_parser import parse_react_response
+from agent.prompts import build_observation_message, build_system_prompt
 from tools.registry import ToolRegistry
 from utils.logger import get_logger
 
