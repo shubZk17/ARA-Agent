@@ -60,6 +60,12 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Below this many populated metrics, the pipeline abstains instead of issuing
+# a recommendation. A full yfinance fetch yields 21 of 22; single digits means
+# the tool failed or the ticker is thinly covered, and either way there is not
+# enough here to reason from.
+MIN_METRICS_FOR_RECOMMENDATION = 8
+
 
 class SynthesisEngine:
     """
@@ -188,6 +194,23 @@ class SynthesisEngine:
         - Risk severity
         - Confidence level
         """
+        # --- Abstain gate (plan §5.4) ---
+        # A recommendation built on almost no metrics is not a cautious HOLD,
+        # it is a guess wearing a HOLD's clothes. Refusing to answer is a
+        # legitimate — and for a real investing tool, necessary — output.
+        #
+        # Deliberately reuses the existing INSUFFICIENT_DATA rather than
+        # adding a near-synonym INSUFFICIENT_EVIDENCE: report_generator and
+        # the 22 evaluation metrics already handle this value, and two enum
+        # members meaning "we don't know" would just need disambiguating
+        # everywhere they are read.
+        if financial.metrics_available < MIN_METRICS_FOR_RECOMMENDATION:
+            logger.warning(
+                f"Abstaining: only {financial.metrics_available} metrics available "
+                f"(need {MIN_METRICS_FOR_RECOMMENDATION})"
+            )
+            return InvestmentOutlook.INSUFFICIENT_DATA
+
         # Insufficient data → can't recommend
         if confidence.overall < 0.25:
             return InvestmentOutlook.INSUFFICIENT_DATA

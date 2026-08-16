@@ -71,9 +71,47 @@ logger = get_logger(__name__)
 # ===================================================================
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
-EMBEDDING_DIMENSIONS = 1536
+EMBEDDING_DIMENSIONS = 1536  # OpenAI text-embedding-3-small
+LOCAL_EMBEDDING_DIMENSIONS = 384  # all-MiniLM-L6-v2
 MAX_TOKENS_PER_CHUNK = 8191  # Model limit
 MAX_BATCH_SIZE = 100  # OpenAI batch limit
+
+# Backend identifiers
+BACKEND_OPENAI = "openai"
+BACKEND_LOCAL = "local-minilm"
+BACKEND_HASH = "hash-fallback"
+
+# Process-wide degradation flag. The confidence calibrator needs to know that
+# retrieval ran on noise, and it has no handle on the pipeline instance —
+# main.py constructs exactly one for the process.
+# ponytail: process-global; make it per-run if concurrent runs ever share a
+# process (the same caveat already applies to the node-level registry globals).
+_DEGRADED = False
+
+
+def embeddings_degraded() -> bool:
+    """True if any embedding in this process fell back to hash vectors."""
+    return _DEGRADED
+
+# ===================================================================
+# Why a local default (defect D6)
+# ===================================================================
+# With no OPENAI_API_KEY the pipeline used to fall through to a SHA-256
+# tiled vector. Those vectors are structurally valid and semantically
+# meaningless: retrieval kept working, kept returning results, and every
+# result was noise. Nothing in the logs said so.
+#
+# The default is now a real local model — all-MiniLM-L6-v2, run through
+# the ONNX runtime that ships inside chromadb, which is already a
+# dependency. No API key, no torch, ~80MB cached once on first use.
+#
+# plan.md §5.6 proposed `sentence-transformers` for the same model. This
+# uses the identical model via a package already installed, which avoids
+# pulling torch (~2GB on Windows) for no behavioural difference.
+#
+# The hash fallback still exists, but only as a last resort, and it now
+# sets `is_degraded` so the confidence calibrator can penalize the run
+# instead of silently trusting noise.
 
 
 class EmbeddingPipeline:
@@ -109,11 +147,54 @@ class EmbeddingPipeline:
         self._api_key = api_key or os.getenv("OPENAI_API_KEY", "")
         self._max_retries = max_retries
         self._client = None  # Lazy initialization
+        self._local_fn = None  # Lazy-loaded ONNX embedding function
+        self._degraded = False
+        self._degraded_warned = False
 
-        if not self._api_key:
-            logger.warning(
-                "OPENAI_API_KEY not set. Embedding pipeline will use "
-                "fallback placeholder embeddings (NOT suitable for production)."
+        # OpenAI only when a key is present AND an OpenAI model was asked for.
+        if self._api_key and model.startswith("text-embedding"):
+            self._backend = BACKEND_OPENAI
+            self._dimensions = EMBEDDING_DIMENSIONS
+        else:
+            self._backend = BACKEND_LOCAL
+            self._dimensions = LOCAL_EMBEDDING_DIMENSIONS
+
+        logger.info(
+            f"Embedding backend: {self._backend} ({self._dimensions}-dim)"
+        )
+
+    @property
+    def backend(self) -> str:
+        """Which backend is actually in use."""
+        return self._backend
+
+    @property
+    def dimensions(self) -> int:
+        """Vector width of the active backend. Collections are per-width."""
+        return self._dimensions
+
+    @property
+    def is_degraded(self) -> bool:
+        """
+        True once any embedding has been produced by the hash fallback.
+
+        Retrieval results from a degraded pipeline are noise. The confidence
+        calibrator reads this so a run built on noise cannot report the same
+        confidence as one built on real semantic matches.
+        """
+        return self._degraded
+
+    def _mark_degraded(self, reason: str) -> None:
+        """Record — loudly, once — that we have fallen back to hash vectors."""
+        global _DEGRADED
+        self._degraded = True
+        _DEGRADED = True
+        if not self._degraded_warned:
+            self._degraded_warned = True
+            logger.error(
+                f"EMBEDDINGS DEGRADED: {reason}. Falling back to hash vectors, "
+                f"which carry no semantic meaning — retrieval results for this "
+                f"run are effectively random and confidence will be penalized."
             )
 
     def _get_client(self):
@@ -135,6 +216,35 @@ class EmbeddingPipeline:
             )
             return None
 
+    def _get_local_fn(self):
+        """
+        Lazy-load the ONNX MiniLM embedder bundled with chromadb.
+
+        Downloads ~80MB to ~/.cache/chroma on first use, then runs offline.
+        """
+        if self._local_fn is not None:
+            return self._local_fn
+
+        try:
+            from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
+            self._local_fn = DefaultEmbeddingFunction()
+            logger.info("Local ONNX embedding model loaded (all-MiniLM-L6-v2)")
+            return self._local_fn
+        except Exception as e:
+            self._mark_degraded(f"local embedding model unavailable ({e})")
+            return None
+
+    def _embed_local(self, texts: list[str]) -> list[list[float]]:
+        """Embed with the local model, falling back to hash vectors on failure."""
+        fn = self._get_local_fn()
+        if fn is None:
+            return [self._fallback_embedding(t) for t in texts]
+        try:
+            return [list(map(float, v)) for v in fn(texts)]
+        except Exception as e:
+            self._mark_degraded(f"local embedding call failed ({e})")
+            return [self._fallback_embedding(t) for t in texts]
+
     def embed_text(self, text: str) -> list[float]:
         """
         Generate embedding for a single text string.
@@ -152,10 +262,14 @@ class EmbeddingPipeline:
         """
         if not text or not text.strip():
             logger.warning("Attempted to embed empty text — returning zero vector")
-            return [0.0] * EMBEDDING_DIMENSIONS
+            return [0.0] * self._dimensions
+
+        if self._backend == BACKEND_LOCAL:
+            return self._embed_local([text.strip()])[0]
 
         client = self._get_client()
         if client is None:
+            self._mark_degraded("OpenAI client unavailable")
             return self._fallback_embedding(text)
 
         for attempt in range(self._max_retries):
@@ -214,8 +328,16 @@ class EmbeddingPipeline:
                 clean_texts.append("placeholder")  # OpenAI rejects empty strings
                 empty_indices.add(i)
 
+        if self._backend == BACKEND_LOCAL:
+            embeddings = self._embed_local(clean_texts)
+            for idx in empty_indices:
+                if idx < len(embeddings):
+                    embeddings[idx] = [0.0] * self._dimensions
+            return embeddings
+
         client = self._get_client()
         if client is None:
+            self._mark_degraded("OpenAI client unavailable")
             return [self._fallback_embedding(t) for t in texts]
 
         all_embeddings: list[list[float]] = []
@@ -258,29 +380,31 @@ class EmbeddingPipeline:
         # Zero out embeddings for empty inputs
         for idx in empty_indices:
             if idx < len(all_embeddings):
-                all_embeddings[idx] = [0.0] * EMBEDDING_DIMENSIONS
+                all_embeddings[idx] = [0.0] * self._dimensions
 
         return all_embeddings
 
-    @staticmethod
-    def _fallback_embedding(text: str) -> list[float]:
+    def _fallback_embedding(self, text: str) -> list[float]:
         """
-        Generate a deterministic placeholder embedding when the API is unavailable.
+        Generate a deterministic placeholder embedding — LAST RESORT ONLY.
 
         WHY a fallback instead of crashing?
-        - Development/testing may not have API keys.
         - The agent should degrade gracefully, not crash.
-        - The fallback produces poor retrieval quality but the system still functions.
+        - Everything downstream keeps running on real financial data; only
+          retrieval is affected.
 
-        METHOD:
-        Uses a simple hash-based approach to produce consistent (deterministic)
-        but low-quality vectors. Same text always produces same vector.
+        WHAT IT COSTS:
+        These vectors encode nothing. Cosine similarity between them is
+        meaningless, so retrieval returns arbitrary chunks. Calling this
+        marks the pipeline degraded (see is_degraded) precisely so that the
+        cost shows up in the confidence score instead of being invisible.
         """
+        self._mark_degraded("hash fallback used")
         import hashlib
         hash_bytes = hashlib.sha256(text.encode("utf-8")).digest()
-        # Expand hash to fill EMBEDDING_DIMENSIONS
+        # Expand hash to fill the active backend's dimensionality
         embedding = []
-        for i in range(EMBEDDING_DIMENSIONS):
+        for i in range(self._dimensions):
             byte_idx = i % len(hash_bytes)
             # Normalize byte (0-255) to float (-1.0 to 1.0)
             val = (hash_bytes[byte_idx] / 255.0) * 2.0 - 1.0

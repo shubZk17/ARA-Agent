@@ -45,8 +45,10 @@ ARA-1_Submission_Report.md
 resume_points_and_description.md
 resume.md
 
-# Local Test Scripts
-test_*.py
+# Local test scripts at the repo root only — the tests/ suite IS tracked.
+# (A bare `test_*.py` also matched tests/test_*.py and would have silently
+#  excluded the whole suite.)
+/test_*.py
 
 ara_agent_interview_handbook.txt
 

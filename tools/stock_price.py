@@ -52,45 +52,64 @@ class StockPriceTool(BaseTool):
             )
         ]
 
-    def _execute(self, tool_input: dict[str, Any]) -> str:
+    def fetch(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        """Retrieve raw price data. Every number stays unscaled."""
         ticker_symbol = tool_input.get("ticker", "").upper().strip()
         if not ticker_symbol:
-            return "Error: 'ticker' parameter is required."
+            raise ValueError("'ticker' parameter is required.")
 
         stock = yf.Ticker(ticker_symbol)
         info = stock.info
 
         # yfinance returns an empty or minimal dict for invalid tickers
-        if not info or info.get("regularMarketPrice") is None:
+        current_price = info.get("regularMarketPrice") or info.get("currentPrice")
+        if current_price is None:
             # Try fast_info as fallback (yfinance 0.2.x+)
             try:
-                fast = stock.fast_info
-                current_price = getattr(fast, "last_price", None)
-                if current_price is None:
-                    return f"Error: No price data found for ticker '{ticker_symbol}'. Verify the symbol is correct."
+                current_price = getattr(stock.fast_info, "last_price", None)
             except Exception:
-                return f"Error: No data found for ticker '{ticker_symbol}'. Verify the symbol is correct."
+                current_price = None
+            if current_price is None:
+                raise ValueError(
+                    f"No price data found for ticker '{ticker_symbol}'. "
+                    f"Verify the symbol is correct."
+                )
 
-        # Extract key price data with safe defaults
-        current_price = info.get("regularMarketPrice") or info.get("currentPrice", "N/A")
-        prev_close = info.get("regularMarketPreviousClose", "N/A")
-        open_price = info.get("regularMarketOpen") or info.get("open", "N/A")
-        day_high = info.get("regularMarketDayHigh") or info.get("dayHigh", "N/A")
-        day_low = info.get("regularMarketDayLow") or info.get("dayLow", "N/A")
-        volume = info.get("regularMarketVolume") or info.get("volume", "N/A")
-        market_cap = info.get("marketCap", "N/A")
-        fifty_two_high = info.get("fiftyTwoWeekHigh", "N/A")
-        fifty_two_low = info.get("fiftyTwoWeekLow", "N/A")
-        currency = info.get("currency", "USD")
+        prev_close = info.get("regularMarketPreviousClose")
 
-        # Calculate daily change
+        payload: dict[str, Any] = {
+            "ticker": ticker_symbol,
+            "currency": info.get("currency", "USD"),
+            "current_price": current_price,
+            "previous_close": prev_close,
+            "open": info.get("regularMarketOpen") or info.get("open"),
+            "day_high": info.get("regularMarketDayHigh") or info.get("dayHigh"),
+            "day_low": info.get("regularMarketDayLow") or info.get("dayLow"),
+            "volume": info.get("regularMarketVolume") or info.get("volume"),
+            "market_cap": info.get("marketCap"),
+            "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+            "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+        }
+
+        if isinstance(current_price, (int, float)) and isinstance(prev_close, (int, float)) and prev_close:
+            payload["daily_change"] = current_price - prev_close
+            payload["daily_change_percent"] = ((current_price - prev_close) / prev_close) * 100
+
+        return {k: v for k, v in payload.items() if v is not None}
+
+    def render(self, payload: dict[str, Any]) -> str:
+        """Format a fetch() payload for the LLM."""
+        g = payload.get
+        currency = g("currency", "USD")
+
         change_str = "N/A"
-        if isinstance(current_price, (int, float)) and isinstance(prev_close, (int, float)):
-            change = current_price - prev_close
-            change_pct = (change / prev_close) * 100
-            change_str = f"{change:+.2f} ({change_pct:+.2f}%)"
+        if "daily_change" in payload:
+            change_str = (
+                f"{payload['daily_change']:+.2f} "
+                f"({payload['daily_change_percent']:+.2f}%)"
+            )
 
-        # Format market cap
+        market_cap = g("market_cap")
         if isinstance(market_cap, (int, float)):
             if market_cap >= 1e12:
                 market_cap_str = f"${market_cap / 1e12:.2f}T"
@@ -103,19 +122,17 @@ class StockPriceTool(BaseTool):
         else:
             market_cap_str = "N/A"
 
-        # Format volume
-        if isinstance(volume, (int, float)):
-            volume_str = f"{volume:,.0f}"
-        else:
-            volume_str = "N/A"
+        volume = g("volume")
+        volume_str = f"{volume:,.0f}" if isinstance(volume, (int, float)) else "N/A"
 
         return (
-            f"Stock Price Data for {ticker_symbol}:\n"
-            f"  Current Price: {currency} {current_price}\n"
+            f"Stock Price Data for {g('ticker')}:\n"
+            f"  Current Price: {currency} {g('current_price', 'N/A')}\n"
             f"  Daily Change: {change_str}\n"
-            f"  Open: {currency} {open_price}\n"
-            f"  Day Range: {currency} {day_low} - {currency} {day_high}\n"
-            f"  52-Week Range: {currency} {fifty_two_low} - {currency} {fifty_two_high}\n"
+            f"  Open: {currency} {g('open', 'N/A')}\n"
+            f"  Day Range: {currency} {g('day_low', 'N/A')} - {currency} {g('day_high', 'N/A')}\n"
+            f"  52-Week Range: {currency} {g('fifty_two_week_low', 'N/A')} - "
+            f"{currency} {g('fifty_two_week_high', 'N/A')}\n"
             f"  Volume: {volume_str}\n"
             f"  Market Cap: {market_cap_str}"
         )

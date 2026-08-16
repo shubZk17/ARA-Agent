@@ -9,7 +9,7 @@ STARTUP SEQUENCE:
     2. Initialize tool registry and register all tools
     3. Initialize Phase 2 systems (vector store, embeddings, retrieval, memory)
     4. Initialize Phase 3 systems (synthesis engine, report generator)
-    5. Initialize Phase 4 systems (observability, evaluation, checkpointing)
+    5. Initialize Phase 4 systems (observability, evaluation)
     6. Build the LangGraph agent graph
     7. Load episodic context from prior runs
     8. Accept user query
@@ -80,6 +80,9 @@ def validate_configuration() -> bool:
 
     Returns True if valid, False with error display if not.
     """
+    for notice in settings.warnings():
+        console.print(f"  [yellow]![/yellow] [dim]{notice}[/dim]")
+
     errors = settings.validate()
     if errors:
         console.print("\n[bold red]Configuration Errors:[/bold red]")
@@ -193,7 +196,13 @@ def initialize_phase2_systems():
 
         console.print("[green][OK][/green] Phase 2 systems initialized:")
         console.print(f"     [cyan]Vector Store:[/cyan] {settings.vector_backend} ({vector_store.count()} existing docs)")
-        console.print(f"     [cyan]Embeddings:[/cyan] {settings.embedding_model}")
+        # Report the backend actually selected, not the configured model name
+        # — those diverge whenever OPENAI_API_KEY is absent, and printing the
+        # configured name made a local run look like an OpenAI one.
+        console.print(
+            f"     [cyan]Embeddings:[/cyan] {embedding_pipeline.backend} "
+            f"({embedding_pipeline.dimensions}-dim)"
+        )
         console.print(f"     [cyan]Episodic Memory:[/cyan] {episodic_memory.count} prior episodes")
 
     except Exception as e:
@@ -392,8 +401,7 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
 
 def initialize_phase4_systems() -> dict:
     """
-    Initialize Phase 4 subsystems: observability, evaluation,
-    checkpointing, retry handler, and failure injector.
+    Initialize Phase 4 subsystems: observability and evaluation.
 
     Returns a dict of initialized components.
 
@@ -404,57 +412,38 @@ def initialize_phase4_systems() -> dict:
     """
     components = {}
 
+    # NOTE: each subsystem gets its OWN try block, deliberately.
+    # These used to share one `try/except Exception`, which meant an
+    # ImportError in the first import silently skipped every subsystem after
+    # it — the failure was logged as "non-fatal" and the 22-metric evaluation
+    # just quietly stopped existing. Independent failures must stay independent.
+
     try:
-        # 1. Telemetry Collector
         from quality.observability.collector import TelemetryCollector
+        from quality.observability.tracer import ExecutionTracer
+
         collector = TelemetryCollector()
         components["collector"] = collector
+        components["tracer"] = ExecutionTracer(run_id=collector.run_id)
+    except Exception as e:
+        logger.warning(f"Telemetry unavailable (non-fatal): {e}")
 
-        # 2. Execution Tracer
-        from quality.observability.tracer import ExecutionTracer
-        tracer = ExecutionTracer(run_id=collector.run_id)
-        components["tracer"] = tracer
-
-        # 3. Checkpoint Manager
-        if settings.enable_checkpoints:
-            from agent.checkpoint_manager import CheckpointManager
-            checkpoint_mgr = CheckpointManager(
-                checkpoint_dir=str(settings.checkpoint_dir),
-                run_id=collector.run_id,
-            )
-            components["checkpoint_manager"] = checkpoint_mgr
-
-        # 4. Retry Handler
-        from agent.retry_handler import RetryHandler, RetryConfig
-        retry_handler = RetryHandler(
-            config=RetryConfig(
-                max_retries=settings.max_retries,
-                initial_delay_seconds=settings.retry_backoff_seconds,
-            ),
-            collector=collector,
-        )
-        if settings.enable_fallback:
-            retry_handler.configure_fallback_chain()
-        components["retry_handler"] = retry_handler
-
-        # 5. System Evaluator
+    try:
         if settings.enable_evaluation:
             from quality.evaluation.evaluator import SystemEvaluator
-            evaluator = SystemEvaluator()
-            components["evaluator"] = evaluator
-
-        console.print("[green][OK][/green] Phase 4 systems initialized:")
-        console.print(f"     [cyan]Telemetry:[/cyan] collector + tracer active")
-        console.print(f"     [cyan]Checkpoints:[/cyan] {'enabled' if settings.enable_checkpoints else 'disabled'}")
-        console.print(f"     [cyan]Retry/Fallback:[/cyan] max {settings.max_retries} retries")
-        console.print(f"     [cyan]Evaluation:[/cyan] {'enabled' if settings.enable_evaluation else 'disabled'}")
-
+            components["evaluator"] = SystemEvaluator()
     except Exception as e:
-        logger.warning(f"Phase 4 initialization failed (non-fatal): {e}")
-        console.print(
-            f"[yellow][!][/yellow] Phase 4 unavailable: {e}\n"
-            f"    [dim]Agent will run without evaluation/observability.[/dim]"
-        )
+        logger.warning(f"Evaluation unavailable (non-fatal): {e}")
+
+    console.print("[green][OK][/green] Phase 4 systems initialized:")
+    console.print(
+        f"     [cyan]Telemetry:[/cyan] "
+        f"{'collector + tracer active' if 'collector' in components else 'unavailable'}"
+    )
+    console.print(
+        f"     [cyan]Evaluation:[/cyan] "
+        f"{'active' if 'evaluator' in components else 'disabled'}"
+    )
 
     return components
 
@@ -663,47 +652,6 @@ def initialize_phase3_systems() -> dict:
         return {}
 
     return components
-
-
-def run_phase3_synthesis(final_state: dict, phase3_components: dict) -> None:
-    """
-    Run Phase 3 synthesis pipeline on completed agent state.
-
-    This is the POST-GRAPH pipeline:
-    1. Synthesis Engine processes all tool outputs and evidence.
-    2. Report Generator produces Markdown (and optionally PDF) reports.
-    3. Results are displayed to the console.
-    """
-    synthesis_engine = phase3_components.get("synthesis_engine")
-    report_generator = phase3_components.get("report_generator")
-
-    if not synthesis_engine:
-        return
-
-    try:
-        console.print("\n[bold cyan]Phase 3: Running synthesis pipeline...[/bold cyan]")
-
-        # Run synthesis
-        report = synthesis_engine.synthesize(final_state)
-
-        # Generate reports
-        formats = ["markdown"]
-        try:
-            import fpdf
-            formats.append("pdf")
-        except ImportError:
-            pass
-
-        paths = {}
-        if report_generator:
-            paths = report_generator.generate(report, formats=formats)
-
-        # Display synthesis results
-        _display_synthesis_results(report, paths)
-
-    except Exception as e:
-        logger.error(f"Phase 3 synthesis failed: {e}")
-        console.print(f"\n[yellow]Phase 3 synthesis failed (non-fatal):[/yellow] {e}")
 
 
 def _display_synthesis_results(report, paths: dict) -> None:

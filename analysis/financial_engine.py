@@ -52,6 +52,9 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Multipliers for the suffixes tools/financial_metrics.py:_format_large_number emits.
+UNIT_SUFFIXES = {"K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
+
 
 # ===================================================================
 # Metric Definitions — The Knowledge Base
@@ -291,10 +294,23 @@ class FinancialAnalysisEngine:
         Returns:
             FinancialSnapshot with categorized, assessed metrics.
         """
-        # 1. Extract raw metrics from tool outputs
-        raw_metrics = self._extract_metrics_from_observations(
-            tool_calls, tool_observations
-        )
+        # 1. Extract raw metrics — structured payloads first, regex only as
+        #    a fallback for states that have none (episodic replays, legacy
+        #    tools). Which path ran is logged, so silent fallback is visible.
+        raw_metrics = self._extract_metrics_from_structured(tool_calls)
+        if raw_metrics:
+            logger.info(
+                f"Metrics source: STRUCTURED tool payloads ({len(raw_metrics)} values)"
+            )
+        else:
+            raw_metrics = self._extract_metrics_from_observations(
+                tool_calls, tool_observations
+            )
+            logger.warning(
+                f"Metrics source: REGEX fallback ({len(raw_metrics)} values) — "
+                f"no structured payload on any tool call. Values are subject to "
+                f"formatting precision loss."
+            )
 
         # 2. Extract company identity
         ticker, company_name = self._extract_identity(tool_calls, tool_observations)
@@ -343,6 +359,31 @@ class FinancialAnalysisEngine:
         )
         return snapshot
 
+    def _extract_metrics_from_structured(self, tool_calls: list) -> dict[str, float]:
+        """
+        Read canonical-unit metrics straight off the tool payloads.
+
+        This is the preferred path. Tools emit values in the units the
+        thresholds below expect (raw dollars, ratios as ratios, percents as
+        percents — see tools/units.py), so nothing is parsed and nothing is
+        rounded. Later tool calls win over earlier ones for the same key.
+
+        Returns {} when no tool call carries a payload, which is the signal
+        to fall back to regex.
+        """
+        metric_keys = {defn["key"] for defn in METRIC_DEFINITIONS}
+        raw: dict[str, float] = {}
+
+        for tc in tool_calls:
+            payload = getattr(tc, "tool_output_structured", None)
+            if not isinstance(payload, dict):
+                continue
+            for key, value in payload.items():
+                if key in metric_keys and isinstance(value, (int, float)):
+                    raw[key] = float(value)
+
+        return raw
+
     def _extract_metrics_from_observations(
         self, tool_calls: list, observations: list[str]
     ) -> dict[str, float]:
@@ -375,9 +416,12 @@ class FinancialAnalysisEngine:
             "quick_ratio": [r"Quick\s+Ratio[:=\s]+(\d+\.?\d*)"],
             "debt_to_equity": [r"Debt[/-](?:to[/-])?Equity[:=\s]+(\d+\.?\d*)"],
             "beta": [r"Beta[:=\s]+(\d+\.?\d*)"],
-            "total_debt": [r"Total\s+Debt[:=\s]+\$?([\d,]+\.?\d*)"],
-            "total_cash": [r"Total\s+Cash[:=\s]+\$?([\d,]+\.?\d*)"],
-            "free_cash_flow": [r"Free\s+Cash\s+Flow[:=\s]+\$?([-\d,]+\.?\d*)"],
+            # Trailing ([TBMK])? captures the unit suffix the tools emit
+            # ("$84.34B"). Dropping it understated every balance-sheet figure
+            # by up to 10^12 and inverted its assessment — defect D1.
+            "total_debt": [r"Total\s+Debt[:=\s]+\$?([\d,]+\.?\d*)\s*([TBMK])?"],
+            "total_cash": [r"Total\s+Cash[:=\s]+\$?([\d,]+\.?\d*)\s*([TBMK])?"],
+            "free_cash_flow": [r"Free\s+Cash\s+Flow[:=\s]+\$?([-\d,]+\.?\d*)\s*([TBMK])?"],
         }
 
         for metric_key, regex_list in patterns.items():
@@ -386,9 +430,12 @@ class FinancialAnalysisEngine:
                 if match:
                     try:
                         val_str = match.group(1).replace(",", "")
-                        raw[metric_key] = float(val_str)
+                        value = float(val_str)
+                        if match.lastindex and match.lastindex >= 2 and match.group(2):
+                            value *= UNIT_SUFFIXES[match.group(2).upper()]
+                        raw[metric_key] = value
                         break
-                    except (ValueError, IndexError):
+                    except (ValueError, IndexError, KeyError):
                         continue
 
         logger.debug(f"Extracted {len(raw)} raw metrics from tool outputs")
@@ -402,22 +449,28 @@ class FinancialAnalysisEngine:
         company_name = ""
         combined = " ".join(observations)
 
+        # Structured payloads carry identity directly — no parsing needed.
+        for tc in tool_calls:
+            payload = getattr(tc, "tool_output_structured", None)
+            if isinstance(payload, dict):
+                ticker = ticker or str(payload.get("ticker", "") or "")
+                company_name = company_name or str(payload.get("company_name", "") or "")
+        if ticker and company_name:
+            return ticker.upper(), company_name
+
         # Get ticker from tool inputs
         for tc in tool_calls:
-            if hasattr(tc, "tool_input"):
+            if not ticker and hasattr(tc, "tool_input"):
                 t = tc.tool_input.get("ticker", "")
                 if t:
                     ticker = t.upper()
                     break
 
-        # Get company name from observations
-        name_match = re.search(
-            r"Company\s+Profile:\s+(.+?)\s*\(", combined, re.IGNORECASE
-        )
-        if name_match:
-            company_name = name_match.group(1).strip()
-        else:
+        # Fall back to scraping the company name out of the observations
+        if not company_name:
             name_match = re.search(
+                r"Company\s+Profile:\s+(.+?)\s*\(", combined, re.IGNORECASE
+            ) or re.search(
                 r"Financial\s+Metrics\s+for\s+(.+?)\s*\(", combined, re.IGNORECASE
             )
             if name_match:
