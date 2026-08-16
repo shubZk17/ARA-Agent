@@ -123,6 +123,9 @@ def build_graph(
         path_map={
             "tool_node": "tool_node",
             "output_node": "output_node",
+            # Self-loop for unparseable responses (D7). Bounded by
+            # MAX_PARSE_RETRIES and by the iteration limit.
+            "reasoning_node": "reasoning_node",
         },
     )
 

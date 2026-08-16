@@ -359,6 +359,22 @@ class RiskAnalyzer:
         Calculate an overall risk score from individual risk items.
 
         Score: 0.0 (very safe) to 1.0 (very risky).
+
+        DEFECT D12, fixed 2026-08-17. The previous formula was:
+
+            min(1.0, total / max(len(risks) * 0.6, 1))
+
+        which for two or more risks is just `mean_severity / 0.6` — the count
+        cancels out, so it never produced the "diminishing returns" its own
+        comment claimed. Concretely: ANY set of two or more MEDIUM risks
+        scored 0.833, and 0.8 is the CRITICAL threshold. Two moderate concerns
+        about Apple were therefore reported as CRITICAL risk, which is how
+        that verdict survived the D2 fix that was supposed to remove it.
+
+        The replacement has three explicit terms:
+          - never softer than the worst single risk, less one notch
+          - never softer than the average across all risks
+          - a small, capped uplift for sheer volume of findings
         """
         if not risks:
             return 0.2  # Baseline — no risks found is not zero risk
@@ -369,18 +385,29 @@ class RiskAnalyzer:
             RiskSeverity.HIGH: 0.8,
             RiskSeverity.CRITICAL: 1.0,
         }
+        scores = [severity_scores.get(r.severity, 0.3) for r in risks]
 
-        total = sum(severity_scores.get(r.severity, 0.3) for r in risks)
-        # Normalize: more risks = higher score, but with diminishing returns
-        normalized = min(1.0, total / max(len(risks) * 0.6, 1))
+        mean = sum(scores) / len(scores)
+        worst = max(scores)
+        # Capped below the width of one severity band, so volume alone can
+        # never promote a pile of trivial findings into a higher band.
+        volume_uplift = min(0.10, 0.05 * (len(risks) - 1))
 
-        return round(normalized, 2)
+        score = max(mean, worst - 0.15) + volume_uplift
+        return round(min(1.0, score), 2)
 
     def _classify_risk_level(self, score: float) -> RiskSeverity:
-        """Classify overall risk level from score."""
-        if score >= 0.8:
+        """
+        Classify overall risk level from score.
+
+        Thresholds sit BETWEEN the per-severity scores (LOW 0.2, MEDIUM 0.5,
+        HIGH 0.8, CRITICAL 1.0), not on top of them. CRITICAL was previously
+        `>= 0.8`, exactly the score of a single HIGH risk — so one high risk
+        was always escalated a band, and nothing could ever report as HIGH.
+        """
+        if score >= 0.90:
             return RiskSeverity.CRITICAL
-        elif score >= 0.6:
+        elif score >= 0.65:
             return RiskSeverity.HIGH
         elif score >= 0.35:
             return RiskSeverity.MEDIUM

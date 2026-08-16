@@ -44,6 +44,40 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# Which upstream source each tool actually reads. Declarative on purpose —
+# a new tool is one row here, and Phase 6/7 tools (market_context, EDGAR,
+# transcripts) are what will finally make this set bigger than one.
+SOURCE_FAMILIES: dict[str, str] = {
+    "get_stock_price": "yfinance",
+    "get_financial_metrics": "yfinance",
+    "get_company_info": "yfinance",
+    "get_news": "yfinance",
+}
+
+# distinct source families -> multiplier on data completeness
+SOURCE_DIVERSITY_FACTOR: dict[int, float] = {
+    0: 0.50,
+    1: 0.75,   # everything from one provider — no way to catch its errors
+    2: 0.90,
+    3: 1.00,
+}
+
+
+def _embeddings_degraded() -> bool:
+    """
+    Whether retrieval ran on meaningless hash vectors this process.
+
+    Imported lazily and defensively: analysis/ must stay runnable when the
+    knowledge layer is absent (a synthesis-only replay, or a test that never
+    builds a vector store).
+    """
+    try:
+        from knowledge.retrieval.embeddings import embeddings_degraded
+        return embeddings_degraded()
+    except Exception:
+        return False
+
+
 class ConfidenceCalibrator:
     """
     Produces calibrated confidence scores based on evidence quality,
@@ -106,6 +140,17 @@ class ConfidenceCalibrator:
             + rc * weights["recency"]
         )
 
+        # Retrieval degradation is a hard cap, not a nudge. If embeddings fell
+        # back to hash vectors, every retrieved "supporting document" was
+        # picked at random, and no amount of complete financial data makes
+        # that analysis high-confidence (D6).
+        if _embeddings_degraded():
+            overall = min(overall, 0.50)
+            penalties.append(
+                "Embeddings degraded to hash fallback — retrieved evidence is "
+                "not semantically related to the query; confidence capped at 50%"
+            )
+
         # Clamp to [0.10, 0.95]
         overall = max(0.10, min(0.95, overall))
         label = self._score_to_label(overall)
@@ -167,23 +212,37 @@ class ConfidenceCalibrator:
         boosts: list,
     ) -> float:
         """How reliable are our data sources?"""
-        # Phase 2 evidence confidence scores
+        # Measured per-output reliability, written by agent/nodes.py's
+        # tool_node. Before that write existed this branch was unreachable
+        # and execution always fell to the count-based estimate below (D4).
         evidence_confidence = state.get("evidence_confidence", {})
         if evidence_confidence:
             avg = sum(evidence_confidence.values()) / len(evidence_confidence)
+            failed = sum(1 for v in evidence_confidence.values() if v == 0.0)
             if avg >= 0.7:
-                boosts.append(f"High source reliability (avg: {avg:.2f})")
+                boosts.append(
+                    f"High source reliability (measured avg {avg:.2f} "
+                    f"across {len(evidence_confidence)} outputs)"
+                )
+            elif avg < 0.5:
+                penalties.append(
+                    f"Low source reliability (measured avg {avg:.2f})"
+                )
+            if failed:
+                penalties.append(f"{failed} tool call(s) returned no usable evidence")
             return avg
 
-        # If no Phase 2 data, assume moderate (tool outputs are Tier 1)
+        # Fallback: no measurement available (e.g. a replayed episodic state).
+        # Counting successful calls measures effort, not reliability, so this
+        # is capped well below what a measured score can reach.
         tool_calls = state.get("tool_calls", [])
         if tool_calls:
-            # Tool outputs are generally reliable (direct API data)
             succeeded = sum(
                 1 for tc in tool_calls
                 if hasattr(tc, "success") and tc.success
             )
-            return min(0.8, 0.5 + succeeded * 0.1)
+            penalties.append("Source reliability estimated, not measured")
+            return min(0.7, 0.4 + succeeded * 0.1)
 
         return 0.5
 
@@ -193,7 +252,7 @@ class ConfidenceCalibrator:
         penalties: list,
         boosts: list,
     ) -> float:
-        """Did we gather enough types of data?"""
+        """Did we gather enough types of data — and from enough sources?"""
         tool_calls = state.get("tool_calls", [])
         tool_names = set()
         for tc in tool_calls:
@@ -203,13 +262,31 @@ class ConfidenceCalibrator:
         # The ideal analysis uses all 4 tools
         ideal_tools = {"get_stock_price", "get_financial_metrics", "get_company_info", "get_news"}
         covered = len(tool_names & ideal_tools)
-        score = covered / len(ideal_tools)
+        coverage = covered / len(ideal_tools)
 
-        if score >= 0.75:
-            boosts.append(f"Comprehensive data gathering ({covered}/{len(ideal_tools)} key tools used)")
-        elif score < 0.5:
+        # Tool count is not source count. All four tools above read the same
+        # yfinance endpoint, so "4/4 tools used" was scoring a single source
+        # as complete data gathering. Independent sources are what make data
+        # complete — a second opinion, not a fourth phrasing of the first.
+        families = {SOURCE_FAMILIES.get(name, "unknown") for name in tool_names}
+        diversity = SOURCE_DIVERSITY_FACTOR.get(
+            len(families), max(SOURCE_DIVERSITY_FACTOR.values())
+        )
+        score = coverage * diversity
+
+        if coverage >= 0.75:
+            boosts.append(
+                f"Broad data gathering ({covered}/{len(ideal_tools)} tool types used)"
+            )
+        elif coverage < 0.5:
             missing = ideal_tools - tool_names
             penalties.append(f"Incomplete data: missing {', '.join(missing)}")
+
+        if len(families) <= 1:
+            penalties.append(
+                f"Single data source ({', '.join(sorted(families)) or 'none'}) — "
+                f"no independent corroboration of any figure"
+            )
 
         return score
 
@@ -221,13 +298,26 @@ class ConfidenceCalibrator:
         boosts: list,
     ) -> float:
         """Are sources agreeing or contradicting each other?"""
-        score = 1.0  # Start perfect, deduct for conflicts
-
-        # Phase 2 conflict reports
         conflicts = state.get("conflict_reports", [])
+
         if conflicts:
-            score -= min(0.4, len(conflicts) * 0.1)
+            score = 1.0 - min(0.4, len(conflicts) * 0.1)
             penalties.append(f"{len(conflicts)} evidence conflict(s) detected")
+        else:
+            # POLARITY FIX (plan §5.4). This used to start at 1.0 — "perfect
+            # consistency" — whenever no conflicts were reported. But no
+            # conflict has ever been reported: all four tools read the same
+            # yfinance endpoint, so cross-source agreement is unmeasurable by
+            # construction. Scoring an unmeasured quantity as perfect is how
+            # a single-source run earned a "no conflicts detected" boost.
+            #
+            # Absence of evidence is not evidence of absence. Until Phase 6
+            # adds a source that can genuinely disagree, this stays neutral.
+            score = 0.6
+            penalties.append(
+                "Consistency unmeasured — all evidence comes from a single "
+                "data source, so cross-source agreement cannot be assessed"
+            )
 
         # Misalignment is a form of inconsistency
         if misalignment.detected:
@@ -242,9 +332,6 @@ class ConfidenceCalibrator:
                 f"Sentiment-financial misalignment detected "
                 f"({misalignment.misalignment_type.value})"
             )
-
-        if score >= 0.9 and not conflicts and not misalignment.detected:
-            boosts.append("Evidence is internally consistent — no conflicts detected")
 
         return max(0.1, score)
 

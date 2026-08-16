@@ -43,51 +43,52 @@ class CompanyInfoTool(BaseTool):
             )
         ]
 
-    def _execute(self, tool_input: dict[str, Any]) -> str:
+    def fetch(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        """Retrieve the company profile. Mostly identity, not numbers."""
         ticker_symbol = tool_input.get("ticker", "").upper().strip()
         if not ticker_symbol:
-            return "Error: 'ticker' parameter is required."
+            raise ValueError("'ticker' parameter is required.")
 
-        stock = yf.Ticker(ticker_symbol)
-        info = stock.info
-
+        info = yf.Ticker(ticker_symbol).info
         if not info or not info.get("longName"):
-            return f"Error: No company information found for '{ticker_symbol}'."
+            raise ValueError(f"No company information found for '{ticker_symbol}'.")
 
-        company_name = info.get("longName", ticker_symbol)
-        sector = info.get("sector", "N/A")
-        industry = info.get("industry", "N/A")
-        description = info.get("longBusinessSummary", "No description available.")
-        country = info.get("country", "N/A")
-        city = info.get("city", "N/A")
-        state = info.get("state", "")
-        website = info.get("website", "N/A")
-        employees = info.get("fullTimeEmployees", "N/A")
-        ceo = info.get("companyOfficers", [{}])
-
-        # Format employee count
-        if isinstance(employees, (int, float)):
-            employees_str = f"{employees:,}"
-        else:
-            employees_str = "N/A"
-
-        # Format location
-        location_parts = [city]
-        if state:
-            location_parts.append(state)
-        location_parts.append(country)
+        # Location is assembled here rather than in render() so that the
+        # payload carries the finished value, not formatting instructions.
+        location_parts = [
+            info.get("city", ""),
+            info.get("state", ""),
+            info.get("country", ""),
+        ]
         location = ", ".join(p for p in location_parts if p and p != "N/A")
 
+        return {
+            "ticker": ticker_symbol,
+            "company_name": info.get("longName", ticker_symbol),
+            "sector": info.get("sector", "N/A"),
+            "industry": info.get("industry", "N/A"),
+            "headquarters": location or "N/A",
+            "employees": info.get("fullTimeEmployees"),
+            "website": info.get("website", "N/A"),
+            "description": info.get("longBusinessSummary", "No description available."),
+        }
+
+    def render(self, payload: dict[str, Any]) -> str:
+        """Format a fetch() payload for the LLM."""
+        employees = payload.get("employees")
+        employees_str = f"{employees:,}" if isinstance(employees, (int, float)) else "N/A"
+
         # Truncate description to avoid overwhelming the LLM context
+        description = payload.get("description", "")
         if len(description) > 500:
             description = description[:497] + "..."
 
         return (
-            f"Company Profile: {company_name} ({ticker_symbol})\n"
-            f"  Sector: {sector}\n"
-            f"  Industry: {industry}\n"
-            f"  Headquarters: {location}\n"
+            f"Company Profile: {payload.get('company_name')} ({payload.get('ticker')})\n"
+            f"  Sector: {payload.get('sector')}\n"
+            f"  Industry: {payload.get('industry')}\n"
+            f"  Headquarters: {payload.get('headquarters')}\n"
             f"  Employees: {employees_str}\n"
-            f"  Website: {website}\n"
+            f"  Website: {payload.get('website')}\n"
             f"  Description: {description}"
         )

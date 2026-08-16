@@ -43,6 +43,7 @@ DESIGN DECISIONS:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -55,6 +56,11 @@ from tools.registry import ToolRegistry
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# How many consecutive unparseable LLM responses to tolerate before giving up
+# and producing a partial answer (D7). Low on purpose: if the model can't emit
+# JSON twice in a row, a third attempt rarely helps and burns tokens.
+MAX_PARSE_RETRIES = 2
 
 # ---------------------------------------------------------------------------
 # Module-level LLM client (initialized lazily)
@@ -233,14 +239,18 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
     parsed = parse_react_response(raw_text)
 
     if parsed.parse_error and not parsed.is_valid:
-        logger.warning(f"Parse error: {parsed.parse_error}")
-        # Give the LLM another chance by treating this as an observation
+        retries = state.get("parse_retry_count", 0) + 1
+        logger.warning(f"Parse error (retry {retries}/{MAX_PARSE_RETRIES}): {parsed.parse_error}")
+        # Feed the error back as an observation and let should_continue route
+        # us to reasoning again. Before D7 was fixed this fell through to
+        # output_node, so a single malformed response ended the whole run.
         return {
             "current_thought": f"Parse error occurred: {parsed.parse_error}",
             "current_action": "",
             "current_action_input": {},
             "current_observation": f"Your previous response was not valid JSON. Error: {parsed.parse_error}. Please respond with ONLY a valid JSON object.",
             "iteration_count": iteration,
+            "parse_retry_count": retries,
             "status": AgentStatus.REASONING,
             "errors": [f"Parse error at iteration {iteration}: {parsed.parse_error}"],
         }
@@ -256,6 +266,7 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
         "current_action": parsed.action,
         "current_action_input": parsed.action_input,
         "iteration_count": iteration,
+        "parse_retry_count": 0,  # A good response clears the retry budget
         "status": AgentStatus.REASONING,
     }
 
@@ -317,6 +328,7 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         tool_name=action,
         tool_input=action_input,
         tool_output=observation,
+        tool_output_structured=result.structured,
         success=result.success,
         error_message=result.error if not result.success else "",
     )
@@ -335,8 +347,40 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         "tool_calls": [tool_call],
         "reasoning_trace": [reasoning_step],
         "status": AgentStatus.OBSERVING,
+        "evidence_confidence": _score_evidence(action, iteration, result.success),
         **_auto_ingest_tool_output(action, action_input, observation, result.success),
     }
+
+
+def _score_evidence(tool_name: str, iteration: int, success: bool) -> dict[str, float]:
+    """
+    Score this tool output's reliability and return it as an evidence_confidence
+    fragment, merged into state by the operator.or_ reducer.
+
+    WHY THIS EXISTS (defect D4): ReliabilityScorer was built in Phase 2 but
+    nothing ever called it during a run, so `evidence_confidence` stayed empty
+    and confidence_calibrator._score_source_reliability fell through to a
+    constant. Every successful run reported ~90% confidence no matter what
+    evidence it had. This is the write that makes that branch reachable.
+    """
+    if not success:
+        # A failed call is evidence of nothing. Recording it as 0.0 rather
+        # than omitting it is deliberate: it drags the average down, which is
+        # the honest signal.
+        return {f"{tool_name}:{iteration}": 0.0}
+
+    try:
+        from knowledge.reliability.scorer import ReliabilityScorer
+
+        score = ReliabilityScorer().score(
+            source_name=tool_name,
+            source_type="tool_output",
+            document_date=datetime.now(timezone.utc).isoformat(),
+        )
+        return {f"{tool_name}:{iteration}": score}
+    except Exception as e:
+        logger.warning(f"Reliability scoring failed (non-fatal): {e}")
+        return {}
 
 
 def _build_tool_error_update(
@@ -446,6 +490,7 @@ def should_continue(state: AgentState) -> str:
 
     Returns:
         "tool_node" — if the agent wants to execute a tool
+        "reasoning_node" — if the response was unparseable and retries remain
         "output_node" — if the agent has a final answer or hit limits
     """
     # Check for final answer
@@ -465,8 +510,15 @@ def should_continue(state: AgentState) -> str:
     if state.get("current_action"):
         return "tool_node"
 
-    # No action and no final answer — likely a parse error
-    # Route back to reasoning to retry
+    # No action and no final answer — a parse error. Retry reasoning while
+    # the budget lasts (D7). Bounded twice over: by MAX_PARSE_RETRIES and by
+    # the iteration limit above, which reasoning_node increments every pass.
+    retries = state.get("parse_retry_count", 0)
+    if retries < MAX_PARSE_RETRIES:
+        logger.info(f"Unparseable response — retrying reasoning ({retries}/{MAX_PARSE_RETRIES})")
+        return "reasoning_node"
+
+    logger.warning(f"Giving up after {retries} unparseable responses")
     return "output_node"
 
 

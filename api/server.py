@@ -72,12 +72,26 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS middleware for dashboard access
+# CORS middleware for dashboard access.
+#
+# `allow_origins=["*"]` together with `allow_credentials=True` is the
+# combination browsers refuse to honour anyway, and it invites any site the
+# user visits to call this API with their cookies. Origins are now an explicit
+# allowlist (the local Streamlit dashboard by default); override with
+# CORS_ORIGINS as a comma-separated list.
+_cors_origins = [
+    o.strip()
+    for o in os.getenv(
+        "CORS_ORIGINS", "http://localhost:8501,http://127.0.0.1:8501"
+    ).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -91,7 +105,9 @@ class AnalysisRequest(BaseModel):
     query: str = Field(description="Financial research question")
     max_iterations: int = Field(default=10, description="Max reasoning iterations")
     enable_evaluation: bool = Field(default=True, description="Run evaluation after analysis")
-    enable_failure_injection: bool = Field(default=False, description="Enable failure injection testing")
+    # `enable_failure_injection` removed — quality/evaluation/failure_injector.py
+    # was deleted 2026-08-15, so the flag advertised a capability that no
+    # longer existed anywhere in the codebase.
 
 
 class AnalysisResponse(BaseModel):
@@ -289,8 +305,20 @@ async def list_reports():
 @app.get("/reports/{filename}")
 async def get_report(filename: str):
     """Download a specific report file."""
-    report_path = settings.report_output_dir / filename
-    if not report_path.exists():
+    # Path traversal guard. `settings.report_output_dir / filename` happily
+    # resolves "../../.env" — this endpoint would serve any file the process
+    # can read. Resolve first, then require the result to stay inside the
+    # reports directory; comparing the resolved paths is what makes ".." and
+    # symlinks and absolute paths all fail the same way.
+    reports_root = settings.report_output_dir.resolve()
+    report_path = (reports_root / filename).resolve()
+    if not report_path.is_relative_to(reports_root):
+        raise HTTPException(status_code=400, detail="Invalid report filename")
+
+    if report_path.suffix not in (".md", ".pdf"):
+        raise HTTPException(status_code=400, detail="Invalid report filename")
+
+    if not report_path.is_file():
         raise HTTPException(status_code=404, detail=f"Report not found: {filename}")
 
     media_types = {

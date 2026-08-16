@@ -89,8 +89,18 @@ class Settings:
     vector_backend: str = field(
         default_factory=lambda: os.getenv("VECTOR_BACKEND", "chroma")
     )
+    # The collection name encodes the embedding width. Chroma stores vectors
+    # of one fixed dimensionality per collection, and the local MiniLM default
+    # is 384-dim where OpenAI is 1536-dim — reusing one name across both
+    # either errors or silently corrupts the index. Renaming is the migration:
+    # the old `ara_financial_docs` collection is simply left behind.
     vector_collection_name: str = field(
-        default_factory=lambda: os.getenv("VECTOR_COLLECTION", "ara_financial_docs")
+        default_factory=lambda: os.getenv("VECTOR_COLLECTION")
+        or (
+            "ara_docs_openai_1536"
+            if os.getenv("OPENAI_API_KEY")
+            else "ara_docs_minilm_384"
+        )
     )
     chroma_persist_dir: Path = field(
         default_factory=lambda: _PROJECT_ROOT / "data" / "chroma"
@@ -133,31 +143,16 @@ class Settings:
         default_factory=lambda: _PROJECT_ROOT / "data" / "failures"
     )
 
-    # --- Phase 4: Checkpointing ---
-    checkpoint_dir: Path = field(
-        default_factory=lambda: _PROJECT_ROOT / "data" / "checkpoints"
-    )
-    enable_checkpoints: bool = field(
-        default_factory=lambda: os.getenv("ENABLE_CHECKPOINTS", "true").lower() == "true"
-    )
-
-    # --- Phase 4: Retry / Fallback ---
-    max_retries: int = field(
-        default_factory=lambda: int(os.getenv("MAX_RETRIES", "3"))
-    )
-    retry_backoff_seconds: float = field(
-        default_factory=lambda: float(os.getenv("RETRY_BACKOFF", "1.0"))
-    )
-    enable_fallback: bool = field(
-        default_factory=lambda: os.getenv("ENABLE_FALLBACK", "true").lower() == "true"
-    )
+    # Checkpointing and retry/fallback settings were removed alongside
+    # agent/checkpoint_manager.py and agent/retry_handler.py (2026-08-17).
+    # Both modules were constructed and never invoked; a knob that configures
+    # nothing is worse than no knob, because it reads as a working feature.
+    # If checkpointing comes back, it should be LangGraph's native
+    # checkpointer rather than a parallel homegrown one — see plan.md §5.7.
 
     # --- Phase 4: Evaluation ---
     enable_evaluation: bool = field(
         default_factory=lambda: os.getenv("ENABLE_EVALUATION", "true").lower() == "true"
-    )
-    enable_failure_injection: bool = field(
-        default_factory=lambda: os.getenv("ENABLE_FAILURE_INJECTION", "false").lower() == "true"
     )
 
     # --- Phase 4: API Server ---
@@ -194,13 +189,26 @@ class Settings:
         if self.max_iterations < 1:
             errors.append("MAX_ITERATIONS must be >= 1")
 
-        # Phase 2 validation (non-blocking — Phase 2 is optional)
-        if self.embedding_api_key:
-            pass  # Embeddings will work
-        else:
-            pass  # Will use fallback embeddings — acceptable for dev
-
         return errors
+
+    def warnings(self) -> list[str]:
+        """
+        Non-fatal configuration notices, surfaced at startup.
+
+        Separate from validate() because these don't stop a run — but they
+        used to be two bare `pass` branches, which meant a silently degraded
+        setup looked identical to a healthy one (defect D6).
+        """
+        notices: list[str] = []
+
+        if not self.embedding_api_key:
+            notices.append(
+                "No OPENAI_API_KEY — using the local all-MiniLM-L6-v2 model for "
+                "embeddings (free, offline after first download). Set the key "
+                "only if you specifically want OpenAI embeddings."
+            )
+
+        return notices
 
     @property
     def active_model(self) -> str:

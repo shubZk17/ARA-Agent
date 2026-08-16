@@ -419,3 +419,15 @@ class TelemetryCollector:
 
     def __len__(self) -> int:
         return len(self._events)
+
+    def __bool__(self) -> bool:
+        """
+        A collector is always truthy — even with zero events.
+
+        Without this, Python derives truthiness from __len__, so `if collector:`
+        was False for an empty collector. Since nothing instruments the run yet,
+        the collector is ALWAYS empty, so every `if collector:` guard in main.py
+        and app.py silently skipped telemetry export and set_context. That is
+        why data/telemetry/ was never created (defect D9).
+        """
+        return True
