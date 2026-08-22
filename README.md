@@ -479,6 +479,6 @@ This project is for educational and research purposes.
 ---
 
 <p align="center">
-  <b>Built with 🧠 by the ARA-1 Team</b><br/>
-  <i>Autonomous reasoning. Grounded evidence. Financial intelligence.</i>
+  <b>Built with ❤️ by Shubham</b><br/>
+  <i>ARA Agent-- Any feedback is appreciated.</i>
 </p>
