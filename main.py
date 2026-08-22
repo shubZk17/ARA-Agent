@@ -9,7 +9,7 @@ STARTUP SEQUENCE:
     2. Initialize tool registry and register all tools
     3. Initialize Phase 2 systems (vector store, embeddings, retrieval, memory)
     4. Initialize Phase 3 systems (synthesis engine, report generator)
-    5. Initialize Phase 4 systems (observability, evaluation, checkpointing)
+    5. Initialize Phase 4 systems (observability, evaluation)
     6. Build the LangGraph agent graph
     7. Load episodic context from prior runs
     8. Accept user query
@@ -58,10 +58,18 @@ from rich.markdown import Markdown
 
 from agent.graph import build_graph
 from agent.state import AgentStatus, create_initial_state
+from config.horizons import (
+    DEFAULT_HORIZON,
+    DEFAULT_RISK_PROFILE,
+    HORIZON_PROFILES,
+    RISK_PROFILES,
+)
 from config.settings import settings
 from tools.company_info import CompanyInfoTool
 from tools.financial_metrics import FinancialMetricsTool
+from tools.market_context import MarketContextTool
 from tools.news import NewsRetrievalTool
+from tools.price_history import PriceHistoryTool
 from tools.registry import ToolRegistry
 from tools.stock_price import StockPriceTool
 from utils.logger import get_logger
@@ -80,6 +88,9 @@ def validate_configuration() -> bool:
 
     Returns True if valid, False with error display if not.
     """
+    for notice in settings.warnings():
+        console.print(f"  [yellow]![/yellow] [dim]{notice}[/dim]")
+
     errors = settings.validate()
     if errors:
         console.print("\n[bold red]Configuration Errors:[/bold red]")
@@ -113,6 +124,8 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(CompanyInfoTool())
     registry.register(FinancialMetricsTool())
     registry.register(NewsRetrievalTool())
+    registry.register(PriceHistoryTool())      # Phase 6 — price series
+    registry.register(MarketContextTool())     # Phase 6 — benchmarks + measured beta
 
     logger.info(f"Registered {len(registry)} tools: {registry.list_tools()}")
     return registry
@@ -140,7 +153,7 @@ def initialize_phase2_systems():
 
     try:
         # 1. Vector Store
-        from retrieval.vector_store import create_vector_store
+        from knowledge.retrieval.vector_store import create_vector_store
         vector_store = create_vector_store(
             backend=settings.vector_backend,
             collection_name=settings.vector_collection_name,
@@ -149,7 +162,7 @@ def initialize_phase2_systems():
         components["vector_store"] = vector_store
 
         # 2. Embedding Pipeline
-        from retrieval.embeddings import EmbeddingPipeline
+        from knowledge.retrieval.embeddings import EmbeddingPipeline
         embedding_pipeline = EmbeddingPipeline(
             model=settings.embedding_model,
             api_key=settings.embedding_api_key,
@@ -157,7 +170,7 @@ def initialize_phase2_systems():
         components["embedding_pipeline"] = embedding_pipeline
 
         # 3. Ingestion Pipeline
-        from ingestion.pipeline import IngestionPipeline
+        from knowledge.ingestion.pipeline import IngestionPipeline
         ingestion_pipeline = IngestionPipeline(
             vector_store=vector_store,
             embedding_pipeline=embedding_pipeline,
@@ -165,17 +178,17 @@ def initialize_phase2_systems():
         components["ingestion_pipeline"] = ingestion_pipeline
 
         # 4. Reliability Scorer
-        from reliability.scorer import ReliabilityScorer
+        from knowledge.reliability.scorer import ReliabilityScorer
         reliability_scorer = ReliabilityScorer()
         components["reliability_scorer"] = reliability_scorer
 
         # 5. Conflict Resolver
-        from reliability.conflict_resolver import ConflictResolver
+        from knowledge.reliability.conflict_resolver import ConflictResolver
         conflict_resolver = ConflictResolver()
         components["conflict_resolver"] = conflict_resolver
 
         # 6. Semantic Retriever
-        from retrieval.retriever import SemanticRetriever
+        from knowledge.retrieval.retriever import SemanticRetriever
         semantic_retriever = SemanticRetriever(
             vector_store=vector_store,
             embedding_pipeline=embedding_pipeline,
@@ -185,7 +198,7 @@ def initialize_phase2_systems():
         components["semantic_retriever"] = semantic_retriever
 
         # 7. Episodic Memory
-        from memory.episodic import EpisodicMemory
+        from knowledge.memory.episodic import EpisodicMemory
         episodic_memory = EpisodicMemory(
             storage_dir=str(settings.episodic_memory_dir),
         )
@@ -193,7 +206,13 @@ def initialize_phase2_systems():
 
         console.print("[green][OK][/green] Phase 2 systems initialized:")
         console.print(f"     [cyan]Vector Store:[/cyan] {settings.vector_backend} ({vector_store.count()} existing docs)")
-        console.print(f"     [cyan]Embeddings:[/cyan] {settings.embedding_model}")
+        # Report the backend actually selected, not the configured model name
+        # — those diverge whenever OPENAI_API_KEY is absent, and printing the
+        # configured name made a local run look like an OpenAI one.
+        console.print(
+            f"     [cyan]Embeddings:[/cyan] {embedding_pipeline.backend} "
+            f"({embedding_pipeline.dimensions}-dim)"
+        )
         console.print(f"     [cyan]Episodic Memory:[/cyan] {episodic_memory.count} prior episodes")
 
     except Exception as e:
@@ -303,13 +322,21 @@ def display_results(state: dict) -> None:
 # Main Entry Point
 # ===================================================================
 
-def run_agent(query: str, phase2_components: dict = None) -> dict:
+def run_agent(
+    query: str,
+    phase2_components: dict = None,
+    horizon: str = DEFAULT_HORIZON,
+    risk_profile: str = DEFAULT_RISK_PROFILE,
+) -> dict:
     """
     Run the ARA-1 agent with the given query.
 
     Args:
         query: Financial research question (e.g., "Analyze Tesla stock")
         phase2_components: Dict of Phase 2 systems (or None for Phase 1 only)
+        horizon: Phase 6 — "short_term" or "long_term". Decides which evidence
+            the model is told to prioritize and how synthesis weights it.
+        risk_profile: Phase 6 — "conservative" / "balanced" / "aggressive".
 
     Returns:
         Final agent state dict.
@@ -344,6 +371,8 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
     initial_state = create_initial_state(
         query=query,
         max_iterations=settings.max_iterations,
+        horizon=horizon,
+        risk_profile=risk_profile,
     )
     # Inject episodic context
     if episodic_context:
@@ -352,6 +381,7 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
     # 5. Run the graph
     console.print(f"\n[bold cyan]Starting analysis...[/bold cyan]")
     console.print(f"[dim]Query: {query}[/dim]")
+    console.print(f"[dim]Horizon: {horizon} | Risk profile: {risk_profile}[/dim]")
     console.print(f"[dim]Max iterations: {settings.max_iterations}[/dim]\n")
 
     start_time = time.time()
@@ -392,8 +422,7 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
 
 def initialize_phase4_systems() -> dict:
     """
-    Initialize Phase 4 subsystems: observability, evaluation,
-    checkpointing, retry handler, and failure injector.
+    Initialize Phase 4 subsystems: observability and evaluation.
 
     Returns a dict of initialized components.
 
@@ -404,64 +433,38 @@ def initialize_phase4_systems() -> dict:
     """
     components = {}
 
+    # NOTE: each subsystem gets its OWN try block, deliberately.
+    # These used to share one `try/except Exception`, which meant an
+    # ImportError in the first import silently skipped every subsystem after
+    # it — the failure was logged as "non-fatal" and the 22-metric evaluation
+    # just quietly stopped existing. Independent failures must stay independent.
+
     try:
-        # 1. Telemetry Collector
-        from observability.collector import TelemetryCollector
+        from quality.observability.collector import TelemetryCollector
+        from quality.observability.tracer import ExecutionTracer
+
         collector = TelemetryCollector()
         components["collector"] = collector
-
-        # 2. Execution Tracer
-        from observability.tracer import ExecutionTracer
-        tracer = ExecutionTracer(run_id=collector.run_id)
-        components["tracer"] = tracer
-
-        # 3. Checkpoint Manager
-        if settings.enable_checkpoints:
-            from agent.checkpoint_manager import CheckpointManager
-            checkpoint_mgr = CheckpointManager(
-                checkpoint_dir=str(settings.checkpoint_dir),
-                run_id=collector.run_id,
-            )
-            components["checkpoint_manager"] = checkpoint_mgr
-
-        # 4. Retry Handler
-        from agent.retry_handler import RetryHandler, RetryConfig
-        retry_handler = RetryHandler(
-            config=RetryConfig(
-                max_retries=settings.max_retries,
-                initial_delay_seconds=settings.retry_backoff_seconds,
-            ),
-            collector=collector,
-        )
-        if settings.enable_fallback:
-            retry_handler.configure_fallback_chain()
-        components["retry_handler"] = retry_handler
-
-        # 5. System Evaluator
-        if settings.enable_evaluation:
-            from evaluation.evaluator import SystemEvaluator
-            evaluator = SystemEvaluator()
-            components["evaluator"] = evaluator
-
-        # 6. Failure Injector (only if explicitly enabled)
-        if settings.enable_failure_injection:
-            from evaluation.failure_injector import FailureInjector
-            injector = FailureInjector(collector=collector)
-            components["failure_injector"] = injector
-
-        console.print("[green][OK][/green] Phase 4 systems initialized:")
-        console.print(f"     [cyan]Telemetry:[/cyan] collector + tracer active")
-        console.print(f"     [cyan]Checkpoints:[/cyan] {'enabled' if settings.enable_checkpoints else 'disabled'}")
-        console.print(f"     [cyan]Retry/Fallback:[/cyan] max {settings.max_retries} retries")
-        console.print(f"     [cyan]Evaluation:[/cyan] {'enabled' if settings.enable_evaluation else 'disabled'}")
-        console.print(f"     [cyan]Failure Injection:[/cyan] {'ACTIVE' if settings.enable_failure_injection else 'disabled'}")
-
+        components["tracer"] = ExecutionTracer(run_id=collector.run_id)
     except Exception as e:
-        logger.warning(f"Phase 4 initialization failed (non-fatal): {e}")
-        console.print(
-            f"[yellow][!][/yellow] Phase 4 unavailable: {e}\n"
-            f"    [dim]Agent will run without evaluation/observability.[/dim]"
-        )
+        logger.warning(f"Telemetry unavailable (non-fatal): {e}")
+
+    try:
+        if settings.enable_evaluation:
+            from quality.evaluation.evaluator import SystemEvaluator
+            components["evaluator"] = SystemEvaluator()
+    except Exception as e:
+        logger.warning(f"Evaluation unavailable (non-fatal): {e}")
+
+    console.print("[green][OK][/green] Phase 4 systems initialized:")
+    console.print(
+        f"     [cyan]Telemetry:[/cyan] "
+        f"{'collector + tracer active' if 'collector' in components else 'unavailable'}"
+    )
+    console.print(
+        f"     [cyan]Evaluation:[/cyan] "
+        f"{'active' if 'evaluator' in components else 'disabled'}"
+    )
 
     return components
 
@@ -529,7 +532,7 @@ def run_phase4_evaluation(
 
 def _display_evaluation_results(eval_report) -> None:
     """Display Phase 4 evaluation results to the console."""
-    from evaluation.metrics import MetricStatus
+    from quality.evaluation.metrics import MetricStatus
 
     # Overall score panel
     score = eval_report.overall_score
@@ -587,7 +590,7 @@ def _display_evaluation_results(eval_report) -> None:
 def _save_episode(episodic_memory, query: str, state: dict, elapsed: float):
     """Save the current run as an episode in episodic memory."""
     try:
-        from memory.episodic import Episode
+        from knowledge.memory.episodic import Episode
 
         tool_calls = state.get("tool_calls", [])
         tools_used = [
@@ -646,8 +649,8 @@ def initialize_phase3_systems() -> dict:
     components = {}
 
     try:
-        from synthesis.engine import SynthesisEngine
-        from synthesis.report_generator import ReportGenerator
+        from analysis.engine import SynthesisEngine
+        from analysis.report_generator import ReportGenerator
 
         synthesis_engine = SynthesisEngine()
         components["synthesis_engine"] = synthesis_engine
@@ -672,50 +675,9 @@ def initialize_phase3_systems() -> dict:
     return components
 
 
-def run_phase3_synthesis(final_state: dict, phase3_components: dict) -> None:
-    """
-    Run Phase 3 synthesis pipeline on completed agent state.
-
-    This is the POST-GRAPH pipeline:
-    1. Synthesis Engine processes all tool outputs and evidence.
-    2. Report Generator produces Markdown (and optionally PDF) reports.
-    3. Results are displayed to the console.
-    """
-    synthesis_engine = phase3_components.get("synthesis_engine")
-    report_generator = phase3_components.get("report_generator")
-
-    if not synthesis_engine:
-        return
-
-    try:
-        console.print("\n[bold cyan]Phase 3: Running synthesis pipeline...[/bold cyan]")
-
-        # Run synthesis
-        report = synthesis_engine.synthesize(final_state)
-
-        # Generate reports
-        formats = ["markdown"]
-        try:
-            import fpdf
-            formats.append("pdf")
-        except ImportError:
-            pass
-
-        paths = {}
-        if report_generator:
-            paths = report_generator.generate(report, formats=formats)
-
-        # Display synthesis results
-        _display_synthesis_results(report, paths)
-
-    except Exception as e:
-        logger.error(f"Phase 3 synthesis failed: {e}")
-        console.print(f"\n[yellow]Phase 3 synthesis failed (non-fatal):[/yellow] {e}")
-
-
 def _display_synthesis_results(report, paths: dict) -> None:
     """Display Phase 3 synthesis results to the console."""
-    from synthesis.schemas import InvestmentOutlook, RiskSeverity
+    from analysis.schemas import InvestmentOutlook, RiskSeverity
 
     # Investment Outlook
     outlook_colors = {
@@ -731,12 +693,21 @@ def _display_synthesis_results(report, paths: dict) -> None:
     console.print(Panel(
         Text.from_markup(
             f"[bold]Investment Outlook:[/bold] [{color}]"
-            f"{report.outlook.value.replace('_', ' ').upper()}[/{color}]\n"
+            f"{report.outlook.value.replace('_', ' ').upper()}[/{color}] "
+            f"over {report.target_holding_period or report.horizon}\n"
             f"[bold]Confidence:[/bold] {report.confidence.overall:.0%} "
             f"({report.confidence.label})\n"
             f"[bold]Financial Health:[/bold] {report.financial.financial_health_score:.2f}\n"
-            f"[bold]Sentiment:[/bold] {report.sentiment.overall_direction.value}\n"
-            f"[bold]Risk Level:[/bold] {report.risk.overall_risk_level.value}"
+            + (
+                f"[bold]Price Trend:[/bold] {report.technical.trend_label} "
+                f"({report.technical.trend_score:.2f})\n"
+                if report.technical.available else ""
+            )
+            + f"[bold]Sentiment:[/bold] {report.sentiment.overall_direction.value}\n"
+            f"[bold]Risk Level:[/bold] {report.risk.overall_risk_level.value}\n"
+            f"[bold]Invalidated if:[/bold] "
+            f"[dim]{report.recommendation.invalidation_condition or 'n/a'}[/dim]\n"
+            f"[bold]Review by:[/bold] {report.recommendation.review_by_date or 'n/a'}"
         ),
         title="[bold cyan]Phase 3: Synthesis Results[/bold cyan]",
         border_style="cyan",
@@ -768,8 +739,42 @@ def _display_synthesis_results(report, paths: dict) -> None:
             console.print(f"  [dim]📄[/dim] {fmt.upper()}: {path}")
 
 
+def _parse_args(argv: list[str]):
+    """
+    Parse CLI arguments.
+
+    `nargs="*"` on the query is what keeps the old invocation working:
+    `python main.py Analyze Tesla stock` still joins into one query, while
+    `--horizon short_term` is now available beside it. Anything unrecognised
+    would previously have become part of the query; argparse now rejects it,
+    which is the intended trade — a typo'd flag silently becoming part of the
+    research question is worse than an error.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="ARA-1 — autonomous equity research agent.",
+    )
+    parser.add_argument(
+        "query", nargs="*",
+        help="Research question. Omit for interactive mode.",
+    )
+    parser.add_argument(
+        "--horizon", choices=sorted(HORIZON_PROFILES), default=DEFAULT_HORIZON,
+        help="Investment horizon the thesis is written for (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--risk-profile", choices=sorted(RISK_PROFILES), default=DEFAULT_RISK_PROFILE,
+        help="How much drawdown the holder tolerates (default: %(default)s).",
+    )
+    return parser.parse_args(argv)
+
+
 def main():
     """CLI entry point."""
+    args = _parse_args(sys.argv[1:])
+
     # Banner
     console.print(Panel(
         Text.from_markup(
@@ -800,8 +805,8 @@ def main():
     console.print()
 
     # Get query
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
+    if args.query:
+        query = " ".join(args.query)
     else:
         query = console.input("[bold]Enter your financial research query:[/bold] ")
 
@@ -820,7 +825,12 @@ def main():
     # Run agent
     try:
         start_time = time.time()
-        final_state = run_agent(query.strip(), phase2_components)
+        final_state = run_agent(
+            query.strip(),
+            phase2_components,
+            horizon=args.horizon,
+            risk_profile=args.risk_profile,
+        )
         elapsed = time.time() - start_time
         display_results(final_state)
 
@@ -871,6 +881,13 @@ def _run_phase3_with_capture(
 
         # Run synthesis
         report = synthesis_engine.synthesize(final_state)
+
+        # Phase 6.6: start the recommendation clock. Deliberately placed HERE
+        # rather than in main() — the CLI, Streamlit and the API all route
+        # through this function, so one call covers every entry point and no
+        # future caller can forget it. Never raises (see record_recommendation).
+        from validation import record_recommendation
+        record_recommendation(report)
 
         # Generate reports
         formats = ["markdown"]

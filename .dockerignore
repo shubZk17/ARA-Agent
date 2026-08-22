@@ -1,0 +1,45 @@
+# Without this file, Dockerfile's `COPY . .` bakes the real .env — API keys
+# included — and the whole .venv into every image layer. Both are permanent:
+# deleting them in a later layer does not remove them from the image history.
+
+# --- Secrets ---
+.env
+.env.*
+*.key
+*.pem
+
+# --- Virtualenvs and caches ---
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# --- VCS and editor ---
+.git/
+.gitignore
+.github/
+.vscode/
+.idea/
+.claude/
+
+# --- Local run artifacts (regenerated at runtime, often large) ---
+logs/
+reports/
+reviews/
+data/
+*.log
+
+# --- Local-only working docs ---
+CLAUDE.md
+plan.md
+ARCHITECTURE.md
+*walkthrough.md
+*implementation_plan.md
+resume*.md
+
+# --- Tests (not needed in a runtime image) ---
+tests/
+test_*.py

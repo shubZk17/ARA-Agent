@@ -60,6 +60,14 @@ class ToolResult(BaseModel):
     success: bool = Field(description="Whether the tool executed successfully")
     data: str = Field(default="", description="The tool's output as a string")
     error: str = Field(default="", description="Error message if success=False")
+    structured: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Canonical-unit values, unformatted. The LLM reads `data`; "
+            "downstream analysis reads THIS. Empty for tools that only "
+            "implement the legacy _execute() contract."
+        ),
+    )
 
 
 class BaseTool(ABC):
@@ -97,10 +105,42 @@ class BaseTool(ABC):
         """Schema of expected input parameters."""
         ...
 
-    @abstractmethod
+    # -----------------------------------------------------------------
+    # Two ways to implement a tool. Pick ONE.
+    #
+    #   (preferred) fetch() + render()
+    #       fetch()  → a dict of CANONICAL-UNIT values (raw dollars, ratios
+    #                  as ratios, percents as percents). Never formatted.
+    #       render() → the human/LLM-readable string, built FROM that dict.
+    #
+    #       Why the split: formatting is lossy. "$84.34B" cannot be turned
+    #       back into 84,343,996,416, and synthesis used to try (defect D1).
+    #       With this split the number never makes that round trip — the
+    #       LLM reads the string, analysis reads the dict.
+    #
+    #   (legacy) _execute()
+    #       Returns only a string. Still supported; such tools simply carry
+    #       an empty `structured` payload and analysis falls back to regex.
+    # -----------------------------------------------------------------
+
+    def fetch(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        """
+        Retrieve canonical-unit values. Override this (with render()).
+
+        Returns an empty dict by default, which signals "this tool uses the
+        legacy _execute() contract".
+        """
+        return {}
+
+    def render(self, payload: dict[str, Any]) -> str:
+        """Format a fetch() payload for the LLM. Override alongside fetch()."""
+        raise NotImplementedError(
+            f"Tool '{self.name}' implements fetch() but not render()."
+        )
+
     def _execute(self, tool_input: dict[str, Any]) -> str:
         """
-        Core tool logic. Subclasses implement this.
+        Legacy single-method contract. Override this OR fetch()/render().
 
         Args:
             tool_input: Dictionary of parameter name → value.
@@ -111,22 +151,31 @@ class BaseTool(ABC):
         Raises:
             Any exception — will be caught by execute().
         """
-        ...
+        raise NotImplementedError(
+            f"Tool '{self.name}' implements neither fetch()/render() nor _execute()."
+        )
 
     def execute(self, tool_input: dict[str, Any]) -> ToolResult:
         """
         Public execution entry point with error handling.
 
-        This wraps _execute() to guarantee:
+        Guarantees:
         1. Exceptions never crash the agent.
         2. Every result is a ToolResult.
         3. Errors are captured with context.
 
-        DO NOT override this method in subclasses.
+        Calls fetch() once; if it yields a payload, renders from it. Otherwise
+        falls back to _execute(). DO NOT override this method in subclasses.
         """
         try:
-            result = self._execute(tool_input)
-            return ToolResult(success=True, data=result)
+            payload = self.fetch(tool_input)
+            if payload:
+                return ToolResult(
+                    success=True,
+                    data=self.render(payload),
+                    structured=payload,
+                )
+            return ToolResult(success=True, data=self._execute(tool_input))
         except Exception as e:
             return ToolResult(
                 success=False,
