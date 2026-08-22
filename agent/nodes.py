@@ -43,18 +43,29 @@ DESIGN DECISIONS:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.state import AgentState, AgentStatus, ReasoningStep, ToolCall
 from config.settings import settings
-from parsers.react_parser import parse_react_response
-from prompts.system import build_observation_message, build_system_prompt
+from agent.react_parser import parse_react_response
+from agent.prompts import build_observation_message, build_system_prompt
+from config.horizons import (
+    DEFAULT_HORIZON,
+    DEFAULT_RISK_PROFILE,
+    get_horizon_profile,
+)
 from tools.registry import ToolRegistry
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+# How many consecutive unparseable LLM responses to tolerate before giving up
+# and producing a partial answer (D7). Low on purpose: if the model can't emit
+# JSON twice in a row, a third attempt rarely helps and burns tokens.
+MAX_PARSE_RETRIES = 2
 
 # ---------------------------------------------------------------------------
 # Module-level LLM client (initialized lazily)
@@ -171,6 +182,8 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
         max_iterations=state["max_iterations"],
         retrieval_context=_get_retrieval_context(state),
         episodic_context=state.get("episodic_context", ""),
+        horizon=state.get("horizon", DEFAULT_HORIZON),
+        risk_profile=state.get("risk_profile", DEFAULT_RISK_PROFILE),
     )
 
     # Build message list
@@ -210,6 +223,25 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
         # First iteration — just send the query
         messages.append(HumanMessage(content=f"Please analyze: {state['query']}"))
 
+    # The model offered a final answer without gathering the evidence this
+    # horizon requires, and should_continue sent it back here. Tell it exactly
+    # what is missing — a repeat of the general rule it already ignored would
+    # not change anything.
+    missing = (
+        _missing_required_tools(state)
+        if state.get("current_action", "").lower().strip() == "final_answer"
+        else set()
+    )
+    if missing:
+        messages.append(HumanMessage(content=(
+            f"REJECTED: you produced a final answer without calling "
+            f"{', '.join(sorted(missing))} in this run.\n"
+            f"Any figure you stated therefore came from retrieved notes about "
+            f"EARLIER runs, not from current data — which is exactly what rule 5 "
+            f"forbids. Call {sorted(missing)[0]} now and respond with the tool "
+            f"action JSON only."
+        )))
+
     # Call LLM
     try:
         logger.debug(f"Calling LLM with {len(messages)} messages")
@@ -233,14 +265,18 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
     parsed = parse_react_response(raw_text)
 
     if parsed.parse_error and not parsed.is_valid:
-        logger.warning(f"Parse error: {parsed.parse_error}")
-        # Give the LLM another chance by treating this as an observation
+        retries = state.get("parse_retry_count", 0) + 1
+        logger.warning(f"Parse error (retry {retries}/{MAX_PARSE_RETRIES}): {parsed.parse_error}")
+        # Feed the error back as an observation and let should_continue route
+        # us to reasoning again. Before D7 was fixed this fell through to
+        # output_node, so a single malformed response ended the whole run.
         return {
             "current_thought": f"Parse error occurred: {parsed.parse_error}",
             "current_action": "",
             "current_action_input": {},
             "current_observation": f"Your previous response was not valid JSON. Error: {parsed.parse_error}. Please respond with ONLY a valid JSON object.",
             "iteration_count": iteration,
+            "parse_retry_count": retries,
             "status": AgentStatus.REASONING,
             "errors": [f"Parse error at iteration {iteration}: {parsed.parse_error}"],
         }
@@ -256,6 +292,7 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
         "current_action": parsed.action,
         "current_action_input": parsed.action_input,
         "iteration_count": iteration,
+        "parse_retry_count": 0,  # A good response clears the retry budget
         "status": AgentStatus.REASONING,
     }
 
@@ -317,6 +354,7 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         tool_name=action,
         tool_input=action_input,
         tool_output=observation,
+        tool_output_structured=result.structured,
         success=result.success,
         error_message=result.error if not result.success else "",
     )
@@ -335,8 +373,74 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         "tool_calls": [tool_call],
         "reasoning_trace": [reasoning_step],
         "status": AgentStatus.OBSERVING,
+        "evidence_confidence": _score_evidence(action, iteration, result.success),
+        "conflict_reports": _extract_conflicts(action, result),
         **_auto_ingest_tool_output(action, action_input, observation, result.success),
     }
+
+
+def _extract_conflicts(tool_name: str, result) -> list[dict]:
+    """
+    Lift any disagreements a tool reported into AgentState.conflict_reports.
+
+    Generic on purpose: a tool that can check a figure against a second
+    derivation puts them under `conflicts` in its structured payload, and this
+    one line carries them into state — no per-tool branch here, ever.
+
+    Until Phase 6 nothing wrote this field (every tool read the same endpoint
+    and had nothing to disagree with), which is why the confidence
+    calibrator's conflict branch had never executed. tools/market_context.py
+    is the first writer.
+    """
+    if not result.success:
+        return []
+
+    conflicts = result.structured.get("conflicts") if result.structured else None
+    if not isinstance(conflicts, list) or not conflicts:
+        return []
+
+    tagged = []
+    for conflict in conflicts:
+        if isinstance(conflict, dict):
+            tagged.append({**conflict, "detected_by": tool_name})
+
+    if tagged:
+        logger.warning(
+            f"{tool_name} reported {len(tagged)} evidence conflict(s) — "
+            f"flagged, not resolved"
+        )
+    return tagged
+
+
+def _score_evidence(tool_name: str, iteration: int, success: bool) -> dict[str, float]:
+    """
+    Score this tool output's reliability and return it as an evidence_confidence
+    fragment, merged into state by the operator.or_ reducer.
+
+    WHY THIS EXISTS (defect D4): ReliabilityScorer was built in Phase 2 but
+    nothing ever called it during a run, so `evidence_confidence` stayed empty
+    and confidence_calibrator._score_source_reliability fell through to a
+    constant. Every successful run reported ~90% confidence no matter what
+    evidence it had. This is the write that makes that branch reachable.
+    """
+    if not success:
+        # A failed call is evidence of nothing. Recording it as 0.0 rather
+        # than omitting it is deliberate: it drags the average down, which is
+        # the honest signal.
+        return {f"{tool_name}:{iteration}": 0.0}
+
+    try:
+        from knowledge.reliability.scorer import ReliabilityScorer
+
+        score = ReliabilityScorer().score(
+            source_name=tool_name,
+            source_type="tool_output",
+            document_date=datetime.now(timezone.utc).isoformat(),
+        )
+        return {f"{tool_name}:{iteration}": score}
+    except Exception as e:
+        logger.warning(f"Reliability scoring failed (non-fatal): {e}")
+        return {}
 
 
 def _build_tool_error_update(
@@ -446,10 +550,27 @@ def should_continue(state: AgentState) -> str:
 
     Returns:
         "tool_node" — if the agent wants to execute a tool
+        "reasoning_node" — if the response was unparseable and retries remain,
+                           or a final answer was offered without the evidence
         "output_node" — if the agent has a final answer or hit limits
     """
+    # Check for error status FIRST. reasoning_node's LLM-failure path sets
+    # current_action="final_answer" to carry the error message out, so testing
+    # for a final answer before testing for an error would treat a dead LLM as
+    # a real answer and send it round the evidence guard below — burning
+    # iterations on a call that cannot succeed.
+    if state.get("status") == AgentStatus.ERROR:
+        return "output_node"
+
     # Check for final answer
     if state.get("current_action", "").lower().strip() == "final_answer":
+        missing = _missing_required_tools(state)
+        if missing and state["iteration_count"] < state["max_iterations"]:
+            logger.warning(
+                f"Final answer offered without calling {', '.join(sorted(missing))} "
+                f"— sending the model back to gather evidence"
+            )
+            return "reasoning_node"
         return "output_node"
 
     # Check iteration limit
@@ -457,17 +578,55 @@ def should_continue(state: AgentState) -> str:
         logger.warning("Iteration limit reached - routing to output")
         return "output_node"
 
-    # Check for error status
-    if state.get("status") == AgentStatus.ERROR:
-        return "output_node"
-
     # Check if there's an action to execute
     if state.get("current_action"):
         return "tool_node"
 
-    # No action and no final answer — likely a parse error
-    # Route back to reasoning to retry
+    # No action and no final answer — a parse error. Retry reasoning while
+    # the budget lasts (D7). Bounded twice over: by MAX_PARSE_RETRIES and by
+    # the iteration limit above, which reasoning_node increments every pass.
+    retries = state.get("parse_retry_count", 0)
+    if retries < MAX_PARSE_RETRIES:
+        logger.info(f"Unparseable response — retrying reasoning ({retries}/{MAX_PARSE_RETRIES})")
+        return "reasoning_node"
+
+    logger.warning(f"Giving up after {retries} unparseable responses")
     return "output_node"
+
+
+def _missing_required_tools(state: AgentState) -> set[str]:
+    """
+    Which of this horizon's required tools have not run successfully yet.
+
+    WHY THIS IS ENFORCED IN CODE RATHER THAN IN THE PROMPT:
+        agent/prompts.py has said "you MUST call get_financial_metrics and
+        get_stock_price" since Phase 5, and models still hand back a fully
+        confident answer having called nothing — assembled out of the
+        retrieved notes from EARLIER runs that the retriever helpfully put in
+        front of them. Phase 5 documented that regression and answered it with
+        stronger wording; it came back the moment the corpus got richer, which
+        is what a prose rule is worth against a model that thinks it already
+        knows the answer.
+
+        The horizon profile already declares required_tools. Checking it here
+        makes the requirement structural: the answer is not accepted until the
+        evidence exists, whatever the model is and however the prompt is
+        phrased. Bounded by max_iterations, so it cannot loop forever.
+
+    Only SUCCESSFUL calls count — a failed fetch gathered nothing, and
+    accepting it would let one bad ticker unlock an evidence-free answer.
+    """
+    profile = get_horizon_profile(state.get("horizon", DEFAULT_HORIZON))
+    available = set(_tool_registry.list_tools()) if _tool_registry else set()
+
+    called = {
+        call.tool_name for call in state.get("tool_calls", [])
+        if getattr(call, "success", False)
+    }
+
+    # Never demand a tool this deployment does not have registered — that
+    # would loop to the iteration limit and produce nothing.
+    return (set(profile.required_tools) & available) - called
 
 
 # ===================================================================

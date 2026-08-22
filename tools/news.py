@@ -52,57 +52,76 @@ class NewsRetrievalTool(BaseTool):
             )
         ]
 
-    def _execute(self, tool_input: dict[str, Any]) -> str:
+    def fetch(self, tool_input: dict[str, Any]) -> dict[str, Any]:
+        """
+        Retrieve up to 5 recent articles as structured records.
+
+        Article fields stay separate (title / publisher / date / link) rather
+        than pre-joined, so Phase 7's per-source reliability scoring has
+        something to score.
+        """
         ticker_symbol = tool_input.get("ticker", "").upper().strip()
         if not ticker_symbol:
-            return "Error: 'ticker' parameter is required."
-
-        stock = yf.Ticker(ticker_symbol)
+            raise ValueError("'ticker' parameter is required.")
 
         try:
-            news = stock.news
-        except Exception:
-            return f"Error: Could not retrieve news for '{ticker_symbol}'."
+            news = yf.Ticker(ticker_symbol).news
+        except Exception as e:
+            raise ValueError(
+                f"Could not retrieve news for '{ticker_symbol}': {e}"
+            ) from e
 
-        if not news:
-            return f"No recent news found for '{ticker_symbol}'."
-
-        # Format up to 5 articles
         articles = []
-        for i, article in enumerate(news[:5], 1):
-            # yfinance news format may vary between versions
-            # Handle both dict and nested content formats
+        for article in (news or [])[:5]:
+            # yfinance news format varies between versions — handle both the
+            # newer nested "content" shape and the older flat one.
             if isinstance(article, dict):
-                # Try newer yfinance format first
                 content = article.get("content", article)
-                if isinstance(content, dict):
-                    title = content.get("title", "No title")
+                if isinstance(content, dict) and "content" in article:
                     publisher = content.get("provider", {})
                     if isinstance(publisher, dict):
                         publisher = publisher.get("displayName", "Unknown source")
-                    pub_date = content.get("pubDate", "Unknown date")
                     link = content.get("canonicalUrl", {})
                     if isinstance(link, dict):
                         link = link.get("url", "No link")
+                    articles.append({
+                        "title": content.get("title", "No title"),
+                        "publisher": publisher,
+                        "published": content.get("pubDate", "Unknown date"),
+                        "link": link,
+                    })
                 else:
-                    title = article.get("title", "No title")
-                    publisher = article.get("publisher", "Unknown source")
-                    pub_date = article.get("providerPublishTime", "Unknown date")
-                    link = article.get("link", "No link")
+                    articles.append({
+                        "title": article.get("title", "No title"),
+                        "publisher": article.get("publisher", "Unknown source"),
+                        "published": article.get("providerPublishTime", "Unknown date"),
+                        "link": article.get("link", "No link"),
+                    })
             else:
-                title = str(article)
-                publisher = "Unknown source"
-                pub_date = "Unknown date"
-                link = "No link"
+                articles.append({
+                    "title": str(article),
+                    "publisher": "Unknown source",
+                    "published": "Unknown date",
+                    "link": "No link",
+                })
 
-            articles.append(
-                f"  {i}. {title}\n"
-                f"     Source: {publisher}\n"
-                f"     Date: {pub_date}\n"
-                f"     Link: {link}"
-            )
+        # Always a non-empty payload so execute() takes the fetch/render path
+        # even when a ticker genuinely has no news.
+        return {"ticker": ticker_symbol, "articles": articles}
 
-        return (
-            f"Recent News for {ticker_symbol}:\n\n"
-            + "\n\n".join(articles)
-        )
+    def render(self, payload: dict[str, Any]) -> str:
+        """Format a fetch() payload for the LLM."""
+        ticker = payload.get("ticker", "")
+        articles = payload.get("articles", [])
+
+        if not articles:
+            return f"No recent news found for '{ticker}'."
+
+        formatted = [
+            f"  {i}. {a.get('title')}\n"
+            f"     Source: {a.get('publisher')}\n"
+            f"     Date: {a.get('published')}\n"
+            f"     Link: {a.get('link')}"
+            for i, a in enumerate(articles, 1)
+        ]
+        return f"Recent News for {ticker}:\n\n" + "\n\n".join(formatted)

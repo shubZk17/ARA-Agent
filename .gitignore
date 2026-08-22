@@ -42,8 +42,29 @@ Thumbs.db
 *walkthrough.md
 *implementation_plan.md
 ARA-1_Submission_Report.md
+resume_points_and_description.md
+resume.md
 
-# Local Test Scripts
-test_*.py
+# Local test scripts at the repo root only — the tests/ suite IS tracked.
+# (A bare `test_*.py` also matched tests/test_*.py and would have silently
+#  excluded the whole suite.)
+/test_*.py
 
+ara_agent_interview_handbook.txt
+
+# Internal working docs (local only — not for the public repo / HF Space)
+CLAUDE.md
+plan.md
+ARCHITECTURE.md
+
+# Run snapshots & review artifacts
+reviews/
+
+# Reports that land in the repo root (Streamlit download export writes to cwd)
+/*_report.md
+/*_report.pdf
+
+# Env backups — these contain real API keys
+.env.*
+!.env.example
 

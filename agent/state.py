@@ -48,6 +48,8 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from config.horizons import DEFAULT_HORIZON, DEFAULT_RISK_PROFILE
+
 
 # ===================================================================
 # Enums — Agent lifecycle states
@@ -88,6 +90,14 @@ class ToolCall(BaseModel):
         description="Arguments passed to the tool"
     )
     tool_output: str = Field(default="", description="Raw tool output")
+    tool_output_structured: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Canonical-unit payload from ToolResult.structured. Analysis reads "
+            "this; the LLM reads tool_output. Empty for legacy tools and for "
+            "states replayed from episodic memory."
+        ),
+    )
     timestamp: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).isoformat(),
         description="ISO timestamp of invocation"
@@ -137,6 +147,14 @@ class AgentState(TypedDict):
     # --- User Input ---
     query: str  # Original user question
 
+    # --- Phase 6: Strategy Framing ---
+    # Stored as the enum's .value STRING, never the enum object: this state is
+    # serialized to JSON for episodic memory and would be pickled by a
+    # checkpointer, and a bare string survives both. config/horizons.py
+    # resolves it back to a profile wherever one is needed.
+    horizon: str        # "short_term" | "long_term"
+    risk_profile: str   # "conservative" | "balanced" | "aggressive"
+
     # --- Reasoning History (append-only) ---
     reasoning_trace: Annotated[list[ReasoningStep], operator.add]
     tool_calls: Annotated[list[ToolCall], operator.add]
@@ -150,6 +168,7 @@ class AgentState(TypedDict):
     # --- Loop Control ---
     iteration_count: int          # Current iteration number
     max_iterations: int           # Safety limit
+    parse_retry_count: int        # Consecutive unparseable LLM responses (D7)
 
     # --- Output ---
     final_answer: str             # Set when agent decides to stop
@@ -164,7 +183,11 @@ class AgentState(TypedDict):
     retrieval_queries: Annotated[list[str], operator.add]    # Queries sent to retrieval
 
     # --- Phase 2: Evidence Governance ---
-    evidence_confidence: dict[str, float]    # evidence_id → confidence score
+    # operator.or_ MERGES dicts across updates. Without it LangGraph REPLACES
+    # the whole dict on every write, so each iteration would discard the
+    # previous iteration's scores and only the last tool call would survive
+    # (defect D5 — latent until something actually wrote this field).
+    evidence_confidence: Annotated[dict[str, float], operator.or_]
     conflict_reports: Annotated[list[dict], operator.add]  # Detected conflicts
 
     # --- Phase 2: Memory ---
@@ -173,15 +196,21 @@ class AgentState(TypedDict):
 
     # --- Phase 4: Observability ---
     telemetry_events: Annotated[list[dict], operator.add]  # Raw telemetry events
-    checkpoint_path: str  # Path to last checkpoint file
 
-    # --- Phase 4: Recovery ---
-    retry_count: int  # Total retries in this run
-    fallback_provider: str  # Provider used if fallback was triggered
-    failure_injections: Annotated[list[str], operator.add]  # Injected failure IDs
+    # REMOVED 2026-08-17: checkpoint_path, retry_count, fallback_provider,
+    # failure_injections. Every subsystem that would have written them
+    # (checkpoint_manager, retry_handler, failure_injector) has been deleted,
+    # so they could never be anything but empty — state that describes a
+    # capability the system does not have. tests/test_state_contract.py now
+    # fails if a new field joins them in never being written.
 
 
-def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
+def create_initial_state(
+    query: str,
+    max_iterations: int = 10,
+    horizon: str = DEFAULT_HORIZON,
+    risk_profile: str = DEFAULT_RISK_PROFILE,
+) -> AgentState:
     """
     Factory function to create a properly initialized agent state.
 
@@ -192,6 +221,8 @@ def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
     """
     return AgentState(
         query=query,
+        horizon=horizon,
+        risk_profile=risk_profile,
         reasoning_trace=[],
         tool_calls=[],
         current_thought="",
@@ -200,6 +231,7 @@ def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
         current_observation="",
         iteration_count=0,
         max_iterations=max_iterations,
+        parse_retry_count=0,
         final_answer="",
         status=AgentStatus.IDLE,
         start_time=datetime.now(timezone.utc).isoformat(),
@@ -213,8 +245,4 @@ def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
         memory_retrievals=[],
         # Phase 4 fields
         telemetry_events=[],
-        checkpoint_path="",
-        retry_count=0,
-        fallback_provider="",
-        failure_injections=[],
     )
