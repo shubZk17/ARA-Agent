@@ -58,10 +58,18 @@ from rich.markdown import Markdown
 
 from agent.graph import build_graph
 from agent.state import AgentStatus, create_initial_state
+from config.horizons import (
+    DEFAULT_HORIZON,
+    DEFAULT_RISK_PROFILE,
+    HORIZON_PROFILES,
+    RISK_PROFILES,
+)
 from config.settings import settings
 from tools.company_info import CompanyInfoTool
 from tools.financial_metrics import FinancialMetricsTool
+from tools.market_context import MarketContextTool
 from tools.news import NewsRetrievalTool
+from tools.price_history import PriceHistoryTool
 from tools.registry import ToolRegistry
 from tools.stock_price import StockPriceTool
 from utils.logger import get_logger
@@ -116,6 +124,8 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(CompanyInfoTool())
     registry.register(FinancialMetricsTool())
     registry.register(NewsRetrievalTool())
+    registry.register(PriceHistoryTool())      # Phase 6 — price series
+    registry.register(MarketContextTool())     # Phase 6 — benchmarks + measured beta
 
     logger.info(f"Registered {len(registry)} tools: {registry.list_tools()}")
     return registry
@@ -312,13 +322,21 @@ def display_results(state: dict) -> None:
 # Main Entry Point
 # ===================================================================
 
-def run_agent(query: str, phase2_components: dict = None) -> dict:
+def run_agent(
+    query: str,
+    phase2_components: dict = None,
+    horizon: str = DEFAULT_HORIZON,
+    risk_profile: str = DEFAULT_RISK_PROFILE,
+) -> dict:
     """
     Run the ARA-1 agent with the given query.
 
     Args:
         query: Financial research question (e.g., "Analyze Tesla stock")
         phase2_components: Dict of Phase 2 systems (or None for Phase 1 only)
+        horizon: Phase 6 — "short_term" or "long_term". Decides which evidence
+            the model is told to prioritize and how synthesis weights it.
+        risk_profile: Phase 6 — "conservative" / "balanced" / "aggressive".
 
     Returns:
         Final agent state dict.
@@ -353,6 +371,8 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
     initial_state = create_initial_state(
         query=query,
         max_iterations=settings.max_iterations,
+        horizon=horizon,
+        risk_profile=risk_profile,
     )
     # Inject episodic context
     if episodic_context:
@@ -361,6 +381,7 @@ def run_agent(query: str, phase2_components: dict = None) -> dict:
     # 5. Run the graph
     console.print(f"\n[bold cyan]Starting analysis...[/bold cyan]")
     console.print(f"[dim]Query: {query}[/dim]")
+    console.print(f"[dim]Horizon: {horizon} | Risk profile: {risk_profile}[/dim]")
     console.print(f"[dim]Max iterations: {settings.max_iterations}[/dim]\n")
 
     start_time = time.time()
@@ -672,12 +693,21 @@ def _display_synthesis_results(report, paths: dict) -> None:
     console.print(Panel(
         Text.from_markup(
             f"[bold]Investment Outlook:[/bold] [{color}]"
-            f"{report.outlook.value.replace('_', ' ').upper()}[/{color}]\n"
+            f"{report.outlook.value.replace('_', ' ').upper()}[/{color}] "
+            f"over {report.target_holding_period or report.horizon}\n"
             f"[bold]Confidence:[/bold] {report.confidence.overall:.0%} "
             f"({report.confidence.label})\n"
             f"[bold]Financial Health:[/bold] {report.financial.financial_health_score:.2f}\n"
-            f"[bold]Sentiment:[/bold] {report.sentiment.overall_direction.value}\n"
-            f"[bold]Risk Level:[/bold] {report.risk.overall_risk_level.value}"
+            + (
+                f"[bold]Price Trend:[/bold] {report.technical.trend_label} "
+                f"({report.technical.trend_score:.2f})\n"
+                if report.technical.available else ""
+            )
+            + f"[bold]Sentiment:[/bold] {report.sentiment.overall_direction.value}\n"
+            f"[bold]Risk Level:[/bold] {report.risk.overall_risk_level.value}\n"
+            f"[bold]Invalidated if:[/bold] "
+            f"[dim]{report.recommendation.invalidation_condition or 'n/a'}[/dim]\n"
+            f"[bold]Review by:[/bold] {report.recommendation.review_by_date or 'n/a'}"
         ),
         title="[bold cyan]Phase 3: Synthesis Results[/bold cyan]",
         border_style="cyan",
@@ -709,8 +739,42 @@ def _display_synthesis_results(report, paths: dict) -> None:
             console.print(f"  [dim]📄[/dim] {fmt.upper()}: {path}")
 
 
+def _parse_args(argv: list[str]):
+    """
+    Parse CLI arguments.
+
+    `nargs="*"` on the query is what keeps the old invocation working:
+    `python main.py Analyze Tesla stock` still joins into one query, while
+    `--horizon short_term` is now available beside it. Anything unrecognised
+    would previously have become part of the query; argparse now rejects it,
+    which is the intended trade — a typo'd flag silently becoming part of the
+    research question is worse than an error.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="ARA-1 — autonomous equity research agent.",
+    )
+    parser.add_argument(
+        "query", nargs="*",
+        help="Research question. Omit for interactive mode.",
+    )
+    parser.add_argument(
+        "--horizon", choices=sorted(HORIZON_PROFILES), default=DEFAULT_HORIZON,
+        help="Investment horizon the thesis is written for (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--risk-profile", choices=sorted(RISK_PROFILES), default=DEFAULT_RISK_PROFILE,
+        help="How much drawdown the holder tolerates (default: %(default)s).",
+    )
+    return parser.parse_args(argv)
+
+
 def main():
     """CLI entry point."""
+    args = _parse_args(sys.argv[1:])
+
     # Banner
     console.print(Panel(
         Text.from_markup(
@@ -741,8 +805,8 @@ def main():
     console.print()
 
     # Get query
-    if len(sys.argv) > 1:
-        query = " ".join(sys.argv[1:])
+    if args.query:
+        query = " ".join(args.query)
     else:
         query = console.input("[bold]Enter your financial research query:[/bold] ")
 
@@ -761,7 +825,12 @@ def main():
     # Run agent
     try:
         start_time = time.time()
-        final_state = run_agent(query.strip(), phase2_components)
+        final_state = run_agent(
+            query.strip(),
+            phase2_components,
+            horizon=args.horizon,
+            risk_profile=args.risk_profile,
+        )
         elapsed = time.time() - start_time
         display_results(final_state)
 
@@ -812,6 +881,13 @@ def _run_phase3_with_capture(
 
         # Run synthesis
         report = synthesis_engine.synthesize(final_state)
+
+        # Phase 6.6: start the recommendation clock. Deliberately placed HERE
+        # rather than in main() — the CLI, Streamlit and the API all route
+        # through this function, so one call covers every entry point and no
+        # future caller can forget it. Never raises (see record_recommendation).
+        from validation import record_recommendation
+        record_recommendation(report)
 
         # Generate reports
         formats = ["markdown"]

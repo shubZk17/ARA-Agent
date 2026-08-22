@@ -21,6 +21,9 @@ MODULES = [
     # Tools
     "tools.base", "tools.registry", "tools.units",
     "tools.stock_price", "tools.financial_metrics", "tools.company_info", "tools.news",
+    "tools.price_history", "tools.market_context",
+    # Analytics (leaf — must import with no other package loaded)
+    "analytics.indicators",
     # Knowledge
     "knowledge.retrieval.embeddings", "knowledge.retrieval.retriever",
     "knowledge.retrieval.vector_store", "knowledge.ingestion.pipeline",
@@ -29,6 +32,9 @@ MODULES = [
     "analysis.engine", "analysis.financial_engine", "analysis.confidence_calibrator",
     "analysis.risk_analyzer", "analysis.sentiment_analyzer",
     "analysis.misalignment_detector", "analysis.report_generator", "analysis.schemas",
+    "analysis.technical_engine",
+    # Phase 6 — horizons and the recommendation log
+    "config.horizons", "validation.recommendation_store",
     # Quality
     "quality.evaluation.evaluator", "quality.evaluation.metrics",
     "quality.evaluation.hallucination_detector", "quality.evaluation.tool_efficiency",

@@ -52,6 +52,13 @@ SOURCE_FAMILIES: dict[str, str] = {
     "get_financial_metrics": "yfinance",
     "get_company_info": "yfinance",
     "get_news": "yfinance",
+    # Phase 6. Both are still yfinance underneath and are declared as such
+    # DELIBERATELY: market_context computes beta from a return series instead
+    # of reading info["beta"], which is a second DERIVATION, not a second
+    # SOURCE. Claiming diversity here would inflate confidence on exactly the
+    # basis the D4 fix removed. Phase 7's EDGAR is the first real second family.
+    "get_price_history": "yfinance",
+    "get_market_context": "yfinance",
 }
 
 # distinct source families -> multiplier on data completeness
@@ -259,8 +266,15 @@ class ConfidenceCalibrator:
             if hasattr(tc, "tool_name"):
                 tool_names.add(tc.tool_name)
 
-        # The ideal analysis uses all 4 tools
-        ideal_tools = {"get_stock_price", "get_financial_metrics", "get_company_info", "get_news"}
+        # What a complete analysis gathers. get_price_history joined this in
+        # Phase 6: with a horizon attached to every verdict, a thesis with no
+        # price series genuinely is missing evidence, not merely lacking a
+        # nice-to-have. get_market_context stays out — it enriches, it is not
+        # required to reach a defensible conclusion.
+        ideal_tools = {
+            "get_stock_price", "get_financial_metrics", "get_company_info",
+            "get_news", "get_price_history",
+        }
         covered = len(tool_names & ideal_tools)
         coverage = covered / len(ideal_tools)
 

@@ -47,6 +47,13 @@ SCALABILITY:
 
 from __future__ import annotations
 
+from config.horizons import (
+    DEFAULT_HORIZON,
+    DEFAULT_RISK_PROFILE,
+    get_horizon_profile,
+    get_risk_profile,
+)
+
 
 # ===================================================================
 # Core System Prompt Template
@@ -116,11 +123,15 @@ CRITICAL RULES
 
 4. COMPREHENSIVE ANALYSIS: Before giving a final answer, you MUST call
    get_financial_metrics and get_stock_price for the ticker in this run.
-   A complete analysis gathers all four:
+   A complete analysis gathers:
    - Current price and recent performance    (get_stock_price)
    - Key financial metrics                   (get_financial_metrics)
    - Company fundamentals                    (get_company_info)
    - Recent news and market context          (get_news)
+   - Price trend, momentum, volatility       (get_price_history)
+   - Performance vs the market and sector    (get_market_context)
+
+   {horizon_directive}
 
 5. RETRIEVED CONTEXT IS NOT A SUBSTITUTE FOR FETCHING DATA. Anything under
    "Retrieved Evidence" or "Prior Analysis" below is background from EARLIER
@@ -143,6 +154,8 @@ CURRENT CONTEXT
 ═══════════════════════════════════════════════════════════════════
 
 User Query: {query}
+Investment Horizon: {horizon_label}
+Risk Profile: {risk_profile_label}
 Current Iteration: {iteration} / {max_iterations}
 
 {retrieval_context}
@@ -171,6 +184,8 @@ def build_system_prompt(
     max_iterations: int,
     retrieval_context: str = "",
     episodic_context: str = "",
+    horizon: str = DEFAULT_HORIZON,
+    risk_profile: str = DEFAULT_RISK_PROFILE,
 ) -> str:
     """
     Construct the complete system prompt with dynamic values injected.
@@ -182,10 +197,20 @@ def build_system_prompt(
         max_iterations: Maximum allowed iterations.
         retrieval_context: Phase 2 — Retrieved evidence from vector memory.
         episodic_context: Phase 2 — Prior analysis history from episodic memory.
+        horizon: Phase 6 — investment horizon; selects which evidence the
+            model is told to prioritize and which tools are mandatory.
+        risk_profile: Phase 6 — conservative / balanced / aggressive.
 
     Returns:
         Fully populated system prompt string.
+
+    NOTE: .format() raises KeyError on ANY placeholder it is not given, so
+    every field in SYSTEM_PROMPT_TEMPLATE must be supplied here — hence the
+    defaults above rather than required arguments.
     """
+    profile = get_horizon_profile(horizon)
+    risk = get_risk_profile(risk_profile)
+
     return SYSTEM_PROMPT_TEMPLATE.format(
         tool_descriptions=tool_descriptions,
         query=query,
@@ -193,6 +218,9 @@ def build_system_prompt(
         max_iterations=max_iterations,
         retrieval_context=retrieval_context,
         episodic_context=episodic_context,
+        horizon_directive=profile.prompt_directive,
+        horizon_label=profile.label,
+        risk_profile_label=f"{risk.label} — {risk.position_note}",
     )
 
 
