@@ -95,15 +95,19 @@ class ReportGenerator:
         md_content = self._render_markdown(report)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         ticker = report.ticker or "UNKNOWN"
+        # The horizon is part of the FILENAME (not the title) because the same
+        # ticker analysed on the same day over two horizons is two different
+        # reports, and without it the second silently overwrote the first.
+        stem = f"{ticker}_{report.horizon}"
 
         if "markdown" in formats:
-            md_path = self._output_dir / f"{ticker}_{timestamp}_report.md"
+            md_path = self._output_dir / f"{stem}_{timestamp}_report.md"
             md_path.write_text(md_content, encoding="utf-8")
             paths["markdown"] = str(md_path)
             logger.info(f"Markdown report saved: {md_path}")
 
         if "pdf" in formats:
-            pdf_path = self._generate_pdf(report, ticker, timestamp)
+            pdf_path = self._generate_pdf(report, ticker, timestamp, stem)
             if pdf_path:
                 paths["pdf"] = pdf_path
 
@@ -142,9 +146,11 @@ class ReportGenerator:
         }
         emoji = outlook_emoji.get(r.outlook, "")
 
-        return f"""# {r.company_name or r.ticker} ({r.ticker}) — Investment Analysis Report
+        horizon_text = r.horizon.replace("_", " ").title()
 
-{emoji} **Recommendation: {r.outlook.value.replace('_', ' ').upper()}** | Confidence: {r.confidence.overall:.0%} ({r.confidence.label})
+        return f"""# {r.company_name or r.ticker} ({r.ticker}) — {horizon_text} Investment Analysis
+
+{emoji} **Recommendation: {r.outlook.value.replace('_', ' ').upper()}** over **{r.target_holding_period or horizon_text}** | Confidence: {r.confidence.overall:.0%} ({r.confidence.label})
 
 ---
 
@@ -152,6 +158,9 @@ class ReportGenerator:
 |-------|-------|
 | **Date** | {datetime.now(timezone.utc).strftime('%B %d, %Y')} |
 | **Ticker** | {r.ticker} |
+| **Horizon** | {horizon_text} ({r.target_holding_period or 'n/a'}) |
+| **Risk Profile** | {r.risk_profile.title()} |
+| **Review By** | {r.recommendation.review_by_date or 'n/a'} |
 | **Model** | {r.model_used} |
 | **Analysis Time** | {r.execution_time_seconds:.1f}s |
 | **Iterations** | {r.iterations_used} |
@@ -204,6 +213,29 @@ class ReportGenerator:
                 # Truncate assessment for table readability
                 assessment_short = m.assessment.split(" — ")[0] if " — " in m.assessment else m.assessment[:40]
                 sections.append(f"| {m.name} | {m.formatted} | {assessment_short} |")
+
+        # Technical readings render through the same MetricInsight table as
+        # everything above — that reuse is why this section costs six lines.
+        technical_available = [m for m in r.technical.metrics if m.value is not None]
+        if technical_available:
+            sections.append(
+                f"\n### Technical Readings "
+                f"— {r.technical.trend_label} (as of {r.technical.as_of})\n"
+            )
+            sections.append("| Metric | Value | Assessment |")
+            sections.append("|--------|-------|------------|")
+            for m in technical_available:
+                assessment_short = (
+                    m.assessment.split(" — ")[0] if " — " in m.assessment
+                    else m.assessment[:40]
+                )
+                sections.append(f"| {m.name} | {m.formatted} | {assessment_short} |")
+            if r.technical.key_levels:
+                levels = " · ".join(
+                    f"{name.replace('_', ' ').upper()}: {value:,.2f}"
+                    for name, value in r.technical.key_levels.items()
+                )
+                sections.append(f"\n**Key levels:** {levels}")
 
         # Strengths & Weaknesses
         if r.financial.key_strengths or r.financial.key_weaknesses:
@@ -326,6 +358,7 @@ class ReportGenerator:
         }
 
         bar = outlook_bar.get(r.outlook, "")
+        rec = r.recommendation
 
         return f"""## 7. Investment Thesis
 
@@ -335,8 +368,22 @@ class ReportGenerator:
 {bar}
 ```
 
-**Outlook:** {r.outlook.value.replace('_', ' ').upper()}
-**Confidence:** {r.confidence.overall:.0%} ({r.confidence.label})
+| | |
+|---|---|
+| **Outlook** | {r.outlook.value.replace('_', ' ').upper()} |
+| **Horizon** | {r.horizon.replace('_', ' ').title()} — {rec.holding_period or r.target_holding_period} |
+| **Confidence** | {r.confidence.overall:.0%} ({r.confidence.label}) |
+| **Entry** | {rec.entry_condition or 'n/a'} |
+| **Invalidated if** | {rec.invalidation_condition or 'n/a'} |
+| **Review by** | {rec.review_by_date or 'n/a'} |
+| **Price at recommendation** | {f'{rec.price_at_recommendation:,.2f}' if rec.price_at_recommendation else 'n/a'} |
+| **Sizing ({r.risk_profile})** | {rec.position_note or 'n/a'} |
+
+> The **invalidation condition** is what makes this recommendation gradable.
+> If it triggers before the review date, the call was wrong — that is the
+> point of stating it in advance.
+
+*Weighting: {rec.rationale}*
 
 ---
 
@@ -408,6 +455,7 @@ class ReportGenerator:
         report: SynthesisReport,
         ticker: str,
         timestamp: str,
+        stem: str = "",
     ) -> Optional[str]:
         """Generate a PDF report using fpdf2."""
         try:
@@ -432,7 +480,9 @@ class ReportGenerator:
             pdf.set_font("Helvetica", "", 12)
             pdf.cell(
                 0, 8,
-                f"Investment Analysis Report - {report.outlook.value.replace('_', ' ').upper()}",
+                f"{report.horizon.replace('_', ' ').title()} Analysis - "
+                f"{report.outlook.value.replace('_', ' ').upper()} "
+                f"({report.target_holding_period or 'n/a'})",
                 new_x="LMARGIN", new_y="NEXT", align="C",
             )
             pdf.cell(
@@ -445,7 +495,18 @@ class ReportGenerator:
             # Sections
             self._pdf_section(pdf, "Executive Summary", report.investment_thesis.split("\n\n")[0] if report.investment_thesis else "N/A")
             self._pdf_section(pdf, "Financial Health", report.financial.overall_assessment)
+            if report.technical.available:
+                self._pdf_section(pdf, "Technical Picture", report.technical.summary)
             self._pdf_section(pdf, "Sentiment", report.sentiment.summary)
+            self._pdf_section(
+                pdf,
+                "Recommendation",
+                f"Outlook: {report.outlook.value.replace('_', ' ').upper()}\n"
+                f"Holding period: {report.recommendation.holding_period}\n"
+                f"Entry: {report.recommendation.entry_condition}\n"
+                f"Invalidated if: {report.recommendation.invalidation_condition}\n"
+                f"Review by: {report.recommendation.review_by_date}",
+            )
 
             if report.misalignment.detected:
                 self._pdf_section(pdf, "Misalignment Warning", report.misalignment.explanation)
@@ -469,7 +530,7 @@ class ReportGenerator:
             )
 
             # Save
-            pdf_path = self._output_dir / f"{ticker}_{timestamp}_report.pdf"
+            pdf_path = self._output_dir / f"{stem or ticker}_{timestamp}_report.pdf"
             pdf.output(str(pdf_path))
             logger.info(f"PDF report saved: {pdf_path}")
             return str(pdf_path)

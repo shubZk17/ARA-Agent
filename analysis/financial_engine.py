@@ -48,6 +48,7 @@ from analysis.schemas import (
     FinancialSnapshot,
     MetricInsight,
 )
+from config.horizons import HorizonProfile
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -283,13 +284,23 @@ class FinancialAnalysisEngine:
     Given the same input, it always produces the same output.
     """
 
-    def analyze(self, tool_calls: list, tool_observations: list[str]) -> FinancialSnapshot:
+    def analyze(
+        self,
+        tool_calls: list,
+        tool_observations: list[str],
+        profile: Optional[HorizonProfile] = None,
+    ) -> FinancialSnapshot:
         """
         Analyze financial data from agent tool calls.
 
         Args:
             tool_calls: List of ToolCall objects from agent state.
             tool_observations: Raw observation strings from reasoning trace.
+            profile: Phase 6 horizon profile. When given, its threshold
+                overrides re-grade individual metrics and its category weights
+                replace uniform weighting in the health score. When None the
+                engine behaves exactly as it did before Phase 6 — which is what
+                keeps replayed states and the existing tests valid.
 
         Returns:
             FinancialSnapshot with categorized, assessed metrics.
@@ -316,7 +327,7 @@ class FinancialAnalysisEngine:
         ticker, company_name = self._extract_identity(tool_calls, tool_observations)
 
         # 3. Calculate metric insights
-        insights = self._calculate_insights(raw_metrics)
+        insights = self._calculate_insights(raw_metrics, profile)
 
         # 4. Categorize
         valuation = [m for m in insights if m.category == "valuation"]
@@ -326,7 +337,7 @@ class FinancialAnalysisEngine:
         leverage = [m for m in insights if m.category == "leverage"]
 
         # 5. Compute overall health score
-        health_score = self._compute_health_score(insights)
+        health_score = self._compute_health_score(insights, profile)
 
         # 6. Identify strengths and weaknesses
         strengths, weaknesses = self._identify_strengths_weaknesses(insights)
@@ -478,7 +489,11 @@ class FinancialAnalysisEngine:
 
         return ticker, company_name
 
-    def _calculate_insights(self, raw_metrics: dict[str, float]) -> list[MetricInsight]:
+    def _calculate_insights(
+        self,
+        raw_metrics: dict[str, float],
+        profile: Optional[HorizonProfile] = None,
+    ) -> list[MetricInsight]:
         """Convert raw metrics into assessed MetricInsight objects."""
         insights = []
 
@@ -504,7 +519,7 @@ class FinancialAnalysisEngine:
 
             assessment = self._assess_metric(
                 value=value,
-                thresholds=defn["thresholds"],
+                thresholds=self._thresholds(defn, profile),
                 higher_is_better=defn["higher_is_better"],
                 context=defn.get("context", ""),
             )
@@ -551,17 +566,41 @@ class FinancialAnalysisEngine:
 
         return f"{strength} — {context}" if context else strength
 
-    def _compute_health_score(self, insights: list[MetricInsight]) -> float:
+    @staticmethod
+    def _thresholds(
+        defn: dict, profile: Optional[HorizonProfile]
+    ) -> tuple[float, float]:
+        """A metric's thresholds, with the horizon's override applied if any."""
+        if profile is None:
+            return defn["thresholds"]
+        return profile.thresholds_for(defn["key"], defn["thresholds"])
+
+    def _compute_health_score(
+        self,
+        insights: list[MetricInsight],
+        profile: Optional[HorizonProfile] = None,
+    ) -> float:
         """
         Compute a 0.0–1.0 financial health score.
 
         Methodology:
-        - Each available metric contributes a score (0, 0.5, or 1.0)
-          based on where it falls relative to thresholds.
-        - The final score is the average across all available metrics.
-        - More missing metrics = lower ceiling (penalizes incomplete data).
+        - Each available metric scores 1.0 / 0.6 / 0.2 by where it falls
+          against its (possibly horizon-overridden) thresholds.
+        - Scores are averaged WITHIN a category, then categories are combined
+          using the horizon's category_weights.
+
+        WHY CATEGORY-FIRST (this changed in Phase 6):
+            A flat average over all metrics silently weights by how many
+            metrics a category happens to have. Valuation has six definitions
+            and leverage four, so valuation was already 1.5x more important
+            than leverage — by accident, not by decision. Averaging within a
+            category first makes the weighting explicit and makes it the
+            horizon's to choose.
+
+        With profile=None every category weighs the same, which is the
+        pre-Phase-6 intent (though not quite its accidental behaviour).
         """
-        scores = []
+        by_category: dict[str, list[float]] = {}
 
         for defn in METRIC_DEFINITIONS:
             matching = [i for i in insights if i.name == defn["name"] and i.value is not None]
@@ -569,27 +608,33 @@ class FinancialAnalysisEngine:
                 continue
 
             value = matching[0].value
-            low, high = defn["thresholds"]
+            low, high = self._thresholds(defn, profile)
 
             if defn["higher_is_better"]:
-                if value >= high:
-                    scores.append(1.0)
-                elif value >= low:
-                    scores.append(0.6)
-                else:
-                    scores.append(0.2)
+                score = 1.0 if value >= high else 0.6 if value >= low else 0.2
             else:
-                if value <= low:
-                    scores.append(1.0)
-                elif value <= high:
-                    scores.append(0.6)
-                else:
-                    scores.append(0.2)
+                score = 1.0 if value <= low else 0.6 if value <= high else 0.2
 
-        if not scores:
+            by_category.setdefault(defn["category"], []).append(score)
+
+        if not by_category:
             return 0.5  # No data — neutral
 
-        return sum(scores) / len(scores)
+        # Absent categories drop out and the rest renormalize, so a run that
+        # gathered no liquidity data is not penalized as if liquidity were zero.
+        total_weight = 0.0
+        weighted = 0.0
+        for category, scores in by_category.items():
+            weight = profile.weight(category) if profile else 1.0
+            if weight <= 0:
+                continue
+            weighted += weight * (sum(scores) / len(scores))
+            total_weight += weight
+
+        if not total_weight:
+            return 0.5
+
+        return weighted / total_weight
 
     def _identify_strengths_weaknesses(
         self, insights: list[MetricInsight]

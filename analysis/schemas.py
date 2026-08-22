@@ -148,6 +148,56 @@ class FinancialSnapshot(BaseModel):
 
 
 # ===================================================================
+# Technical Snapshot — Output of Technical Analysis Engine (Phase 6)
+# ===================================================================
+
+class TechnicalSnapshot(BaseModel):
+    """
+    Price-series read of a ticker: trend, momentum, volatility, levels.
+
+    WHY IT REUSES MetricInsight:
+        Every technical reading is graded exactly the way a financial metric
+        is — a value, a threshold band, an assessment. Emitting the same type
+        means report_generator renders technicals with no new rendering code,
+        and _identify_strengths_weaknesses works on them unchanged. This is
+        the highest-leverage design choice in Phase 6.
+
+    `available` is False when no price-history tool ran. Downstream code must
+    check it rather than inferring from an empty metrics list, because a
+    ticker with genuinely NaN indicators also yields no insights.
+    """
+    ticker: str = Field(default="")
+    as_of: str = Field(default="", description="Date of the last bar (YYYY-MM-DD)")
+    available: bool = Field(
+        default=False, description="Whether price history was actually gathered"
+    )
+
+    metrics: list[MetricInsight] = Field(default_factory=list)
+
+    trend_score: float = Field(
+        default=0.5, description="0.0 (broken downtrend) to 1.0 (clean uptrend)"
+    )
+    trend_label: str = Field(default="unknown")
+    last_close: Optional[float] = Field(default=None)
+
+    # --- Levels a recommendation can be written against ---
+    key_levels: dict[str, float] = Field(
+        default_factory=dict,
+        description="sma_50 / sma_200 / high_52w / low_52w / atr_14 — the "
+                    "numbers an invalidation condition is expressed in",
+    )
+
+    realized_volatility: Optional[float] = Field(
+        default=None, description="Annualized, percent"
+    )
+    max_drawdown: Optional[float] = Field(
+        default=None, description="Worst 1y peak-to-trough, negative percent"
+    )
+
+    summary: str = Field(default="")
+
+
+# ===================================================================
 # Sentiment Profile — Output of Sentiment Analyzer
 # ===================================================================
 
@@ -321,6 +371,49 @@ class ConfidenceScore(BaseModel):
 
 
 # ===================================================================
+# Horizon Recommendation — the dated, gradable verdict (Phase 6)
+# ===================================================================
+
+class HorizonRecommendation(BaseModel):
+    """
+    An InvestmentOutlook with the four things that make it actionable —
+    and, more importantly, GRADABLE.
+
+    WHY THIS EXISTS:
+        "BUY" cannot be scored. Right at five years, wrong at five weeks,
+        and there is no fact that could ever contradict it.
+
+        "BUY, 3-month horizon, invalidated on a daily close below $172 (the
+        50-day SMA)" can be scored, because it says in advance what would
+        make it wrong.
+
+    invalidation_condition is therefore load-bearing, not decoration: it is
+    the field Phase 8's outcome scorer reads to decide whether a
+    recommendation was refuted before its review date. A recommendation
+    without one is unfalsifiable, which for an investing tool is worse than
+    being wrong.
+    """
+    outlook: InvestmentOutlook = Field(default=InvestmentOutlook.INSUFFICIENT_DATA)
+    horizon: str = Field(default="long_term")
+    holding_period: str = Field(default="", description="Human-readable, e.g. '1 to 5 years'")
+
+    entry_condition: str = Field(
+        default="", description="What has to be true to open the position"
+    )
+    invalidation_condition: str = Field(
+        default="", description="What would prove this recommendation wrong"
+    )
+    review_by_date: str = Field(
+        default="", description="ISO date by which this must be reassessed"
+    )
+
+    price_at_recommendation: Optional[float] = Field(default=None)
+    risk_profile: str = Field(default="balanced")
+    position_note: str = Field(default="")
+    rationale: str = Field(default="", description="Why this horizon reaches this verdict")
+
+
+# ===================================================================
 # Synthesis Report — Unified Output of Synthesis Engine
 # ===================================================================
 
@@ -343,8 +436,16 @@ class SynthesisReport(BaseModel):
     company_name: str = Field(default="")
     query: str = Field(default="")
 
+    # --- Horizon (Phase 6) ---
+    # Defaulted so every existing construction site and every replayed report
+    # stays valid; a report written before Phase 6 simply reads as long_term.
+    horizon: str = Field(default="long_term")
+    risk_profile: str = Field(default="balanced")
+    target_holding_period: str = Field(default="")
+
     # --- Engine Outputs ---
     financial: FinancialSnapshot = Field(default_factory=FinancialSnapshot)
+    technical: TechnicalSnapshot = Field(default_factory=TechnicalSnapshot)
     sentiment: SentimentProfile = Field(default_factory=SentimentProfile)
     misalignment: MisalignmentSignal = Field(default_factory=MisalignmentSignal)
     risk: RiskAssessment = Field(default_factory=RiskAssessment)
@@ -356,6 +457,11 @@ class SynthesisReport(BaseModel):
     )
     outlook: InvestmentOutlook = Field(
         default=InvestmentOutlook.INSUFFICIENT_DATA
+    )
+    # The enum above is kept as-is so report_generator and all 22 evaluation
+    # metrics keep working untouched; the dated form sits beside it.
+    recommendation: HorizonRecommendation = Field(
+        default_factory=HorizonRecommendation
     )
     key_findings: list[str] = Field(default_factory=list)
     contradictions: list[str] = Field(default_factory=list)

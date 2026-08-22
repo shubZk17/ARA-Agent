@@ -66,6 +66,7 @@ STALENESS_THRESHOLDS: dict[str, int] = {
     "financial_data": 1,        # Stock prices go stale fast
     "news_article": 7,          # News loses relevance within a week
     "tool_output": 1,           # Tool outputs are point-in-time
+    "ohlcv": 1,                 # Yesterday's close is materially stale for a swing call
     "sec_filing": 90,           # Quarterly filings — 3 months
     "earnings_transcript": 90,
     "analyst_report": 30,

@@ -105,6 +105,16 @@ class AnalysisRequest(BaseModel):
     query: str = Field(description="Financial research question")
     max_iterations: int = Field(default=10, description="Max reasoning iterations")
     enable_evaluation: bool = Field(default=True, description="Run evaluation after analysis")
+    # Phase 6 — optional with a default, so clients written before this
+    # existed keep working and keep getting the long-term view they got before.
+    horizon: str = Field(
+        default="long_term",
+        description="Investment horizon: 'short_term' (1w-3m) or 'long_term' (1-5y)",
+    )
+    risk_profile: str = Field(
+        default="balanced",
+        description="Risk appetite: 'conservative', 'balanced' or 'aggressive'",
+    )
     # `enable_failure_injection` removed — quality/evaluation/failure_injector.py
     # was deleted 2026-08-15, so the flag advertised a capability that no
     # longer existed anywhere in the codebase.
@@ -194,7 +204,12 @@ async def run_analysis(request: AnalysisRequest):
             _phase3_components = initialize_phase3_systems()
 
         # Run agent
-        final_state = run_agent(request.query, _phase2_components)
+        final_state = run_agent(
+            request.query,
+            _phase2_components,
+            horizon=request.horizon,
+            risk_profile=request.risk_profile,
+        )
         elapsed = time.time() - start
 
         # Extract results

@@ -33,6 +33,8 @@ DESIGN PRINCIPLE:
 
 from __future__ import annotations
 
+from typing import Optional
+
 from analysis.schemas import (
     FinancialSnapshot,
     MisalignmentSignal,
@@ -41,6 +43,7 @@ from analysis.schemas import (
     RiskSeverity,
     SentimentDirection,
     SentimentProfile,
+    TechnicalSnapshot,
 )
 from utils.logger import get_logger
 
@@ -60,6 +63,7 @@ class RiskAnalyzer:
         financial: FinancialSnapshot,
         sentiment: SentimentProfile,
         misalignment: MisalignmentSignal,
+        technical: Optional[TechnicalSnapshot] = None,
     ) -> RiskAssessment:
         """
         Run all risk checks and produce a comprehensive assessment.
@@ -68,6 +72,10 @@ class RiskAnalyzer:
             financial: Financial metrics and assessments.
             sentiment: Sentiment profile from news analysis.
             misalignment: Detected sentiment-financial divergence.
+            technical: Phase 6 price-series read. Optional — when absent the
+                price-based checks simply do not fire, which is honest: before
+                Phase 6 the only volatility signal available was `beta`, a
+                single number the provider computed for us.
 
         Returns:
             RiskAssessment with categorized risk items.
@@ -78,6 +86,7 @@ class RiskAnalyzer:
         risks.extend(self._check_valuation_risk(financial))
         risks.extend(self._check_financial_risk(financial))
         risks.extend(self._check_volatility_risk(financial))
+        risks.extend(self._check_price_risk(technical))
         risks.extend(self._check_sentiment_risk(sentiment))
         risks.extend(self._check_misalignment_risk(misalignment))
         risks.extend(self._check_concentration_risk(financial, sentiment))
@@ -152,6 +161,76 @@ class RiskAnalyzer:
                     evidence=f"Price/Sales: {m.formatted}",
                     mitigation="Evaluate revenue growth trajectory and market size.",
                 ))
+
+        return risks
+
+    # ---------------------------------------------------------------
+    # Price Risk (Phase 6 — measured, not reported)
+    # ---------------------------------------------------------------
+    def _check_price_risk(
+        self, technical: Optional[TechnicalSnapshot]
+    ) -> list[RiskItem]:
+        """
+        Risks visible only in the price series.
+
+        These are MEASURED from two years of bars rather than read off a
+        provider's summary field — which is the difference between "beta is
+        1.4" and "this thing actually fell 46% last year".
+        """
+        if technical is None or not technical.available:
+            return []
+
+        risks = []
+
+        vol = technical.realized_volatility
+        if vol is not None and vol > 45:
+            risks.append(RiskItem(
+                category="volatility",
+                title="High Realized Volatility",
+                description=(
+                    f"Annualized realized volatility of {vol:.0f}% means daily "
+                    f"moves of roughly {vol / 16:.1f}% are routine. Position "
+                    f"sizing matters more than entry timing here."
+                ),
+                severity=RiskSeverity.MEDIUM if vol < 70 else RiskSeverity.HIGH,
+                probability="high",
+                evidence=f"30-day realized volatility, annualized: {vol:.1f}%",
+                mitigation="Size the position to the volatility, not to conviction.",
+            ))
+
+        drawdown = technical.max_drawdown
+        if drawdown is not None and drawdown < -30:
+            risks.append(RiskItem(
+                category="volatility",
+                title="Deep Recent Drawdown",
+                description=(
+                    f"The stock fell {abs(drawdown):.0f}% peak-to-trough within "
+                    f"the last year. A holder needed to sit through that; "
+                    f"assume it can happen again."
+                ),
+                severity=RiskSeverity.MEDIUM if drawdown > -50 else RiskSeverity.HIGH,
+                probability="moderate",
+                evidence=f"Maximum 1-year drawdown: {drawdown:.1f}%",
+                mitigation="Check whether the drawdown was company-specific or market-wide.",
+            ))
+
+        if technical.trend_score < 0.30:
+            risks.append(RiskItem(
+                category="technical",
+                title="Established Downtrend",
+                description=(
+                    f"Price is in a {technical.trend_label} (trend score "
+                    f"{technical.trend_score:.2f}). Fundamentals may be sound, "
+                    f"but the market is currently voting the other way."
+                ),
+                severity=RiskSeverity.MEDIUM,
+                probability="high",
+                evidence=technical.summary,
+                mitigation=(
+                    "For a long horizon this can be an entry; for a short one "
+                    "it is a reason to wait for the trend to turn."
+                ),
+            ))
 
         return risks
 

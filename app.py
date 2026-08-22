@@ -226,6 +226,29 @@ with main_tab:
     with button_col:
         run_btn = st.button("🚀 Analyze", use_container_width=True)
 
+    # Phase 6 — the horizon is not a cosmetic filter. It re-weights the whole
+    # synthesis, so the same ticker can legitimately come back BUY on one
+    # setting and HOLD on the other.
+    horizon_col, risk_col = st.columns(2)
+    with horizon_col:
+        horizon = st.radio(
+            "Investment Horizon",
+            options=["long_term", "short_term"],
+            format_func=lambda h: {
+                "long_term": "📈 Long term (1–5 years)",
+                "short_term": "⚡ Short term (1 week – 3 months)",
+            }[h],
+            horizontal=True,
+        )
+    with risk_col:
+        risk_profile = st.radio(
+            "Risk Profile",
+            options=["conservative", "balanced", "aggressive"],
+            index=1,
+            format_func=str.title,
+            horizontal=True,
+        )
+
     if run_btn:
         if not query.strip():
             st.error("Please enter a research query first.")
@@ -260,7 +283,12 @@ with main_tab:
 
                         # Run agent ReAct loop
                         start_time = time.time()
-                        final_state = main.run_agent(query.strip(), phase2_components)
+                        final_state = main.run_agent(
+                            query.strip(),
+                            phase2_components,
+                            horizon=horizon,
+                            risk_profile=risk_profile,
+                        )
                         elapsed = time.time() - start_time
                         
                         # Post-processing: Phase 3 Synthesis & PDF generation

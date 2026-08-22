@@ -48,6 +48,8 @@ from typing import Annotated, Any
 from pydantic import BaseModel, Field
 from typing_extensions import TypedDict
 
+from config.horizons import DEFAULT_HORIZON, DEFAULT_RISK_PROFILE
+
 
 # ===================================================================
 # Enums — Agent lifecycle states
@@ -145,6 +147,14 @@ class AgentState(TypedDict):
     # --- User Input ---
     query: str  # Original user question
 
+    # --- Phase 6: Strategy Framing ---
+    # Stored as the enum's .value STRING, never the enum object: this state is
+    # serialized to JSON for episodic memory and would be pickled by a
+    # checkpointer, and a bare string survives both. config/horizons.py
+    # resolves it back to a profile wherever one is needed.
+    horizon: str        # "short_term" | "long_term"
+    risk_profile: str   # "conservative" | "balanced" | "aggressive"
+
     # --- Reasoning History (append-only) ---
     reasoning_trace: Annotated[list[ReasoningStep], operator.add]
     tool_calls: Annotated[list[ToolCall], operator.add]
@@ -195,7 +205,12 @@ class AgentState(TypedDict):
     # fails if a new field joins them in never being written.
 
 
-def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
+def create_initial_state(
+    query: str,
+    max_iterations: int = 10,
+    horizon: str = DEFAULT_HORIZON,
+    risk_profile: str = DEFAULT_RISK_PROFILE,
+) -> AgentState:
     """
     Factory function to create a properly initialized agent state.
 
@@ -206,6 +221,8 @@ def create_initial_state(query: str, max_iterations: int = 10) -> AgentState:
     """
     return AgentState(
         query=query,
+        horizon=horizon,
+        risk_profile=risk_profile,
         reasoning_trace=[],
         tool_calls=[],
         current_thought="",

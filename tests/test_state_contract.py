@@ -21,8 +21,9 @@ KNOWN_UNUSED: dict[str, str] = {
     "start_time": "set once by create_initial_state; immutable for the run",
     "retrieved_evidence": "Phase 6/7 — retrieval writes to the prompt, not to state",
     "retrieval_queries": "Phase 6/7 — as above",
-    "conflict_reports": "Phase 6.5/7.4 — needs a second source that can disagree",
     "telemetry_events": "plan §5.7 — observability is to be wired, not cut",
+    # conflict_reports left this list in Phase 6: tool_node._extract_conflicts
+    # now writes it, fed by get_market_context's computed-vs-reported beta.
 }
 
 
