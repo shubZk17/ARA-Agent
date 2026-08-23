@@ -40,6 +40,7 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 # Force UTF-8 output on Windows to avoid cp1252 encoding errors
 if sys.platform == "win32":
@@ -71,6 +72,7 @@ from tools.market_context import MarketContextTool
 from tools.news import NewsRetrievalTool
 from tools.price_history import PriceHistoryTool
 from tools.registry import ToolRegistry
+from tools.sec_filings import SecFilingsTool
 from tools.stock_price import StockPriceTool
 from utils.logger import get_logger
 
@@ -126,6 +128,7 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(NewsRetrievalTool())
     registry.register(PriceHistoryTool())      # Phase 6 — price series
     registry.register(MarketContextTool())     # Phase 6 — benchmarks + measured beta
+    registry.register(SecFilingsTool())        # Phase 7 — first independent source
 
     logger.info(f"Registered {len(registry)} tools: {registry.list_tools()}")
     return registry
@@ -768,6 +771,32 @@ def _parse_args(argv: list[str]):
         "--risk-profile", choices=sorted(RISK_PROFILES), default=DEFAULT_RISK_PROFILE,
         help="How much drawdown the holder tolerates (default: %(default)s).",
     )
+    parser.add_argument(
+        "--ingest-pdf", metavar="PATH",
+        help=(
+            "Ingest a PDF's text layer (10-K/10-Q, investor deck) into the "
+            "vector store and exit — no query is run. Phase 7.2."
+        ),
+    )
+    parser.add_argument(
+        "--doc-type", choices=("sec_filing", "analyst_report"), default="sec_filing",
+        help="Document type for --ingest-pdf (default: %(default)s).",
+    )
+    parser.add_argument(
+        "--ingest-transcript", metavar="PATH",
+        help=(
+            "Ingest a plain-text earnings call transcript into the vector "
+            "store and exit — no query is run. Phase 7.3."
+        ),
+    )
+    parser.add_argument(
+        "--fiscal-period", default="",
+        help="Fiscal period label for --ingest-transcript, e.g. 'Q2 FY2026'.",
+    )
+    parser.add_argument(
+        "--ticker", default="",
+        help="Ticker to tag the ingested document with (used with --ingest-pdf/--ingest-transcript).",
+    )
     return parser.parse_args(argv)
 
 
@@ -795,6 +824,48 @@ def main():
     # Initialize Phase 2 systems
     phase2_components = initialize_phase2_systems()
     console.print()
+
+    # --ingest-pdf is a standalone action — ingest and exit, no query
+    if args.ingest_pdf:
+        ingestion_pipeline = phase2_components.get("ingestion_pipeline")
+        if not ingestion_pipeline:
+            console.print("[red]Ingestion pipeline unavailable — cannot ingest PDF.[/red]")
+            sys.exit(1)
+        try:
+            from knowledge.retrieval.schemas import DocumentType
+            doc_type = (
+                DocumentType.ANALYST_REPORT if args.doc_type == "analyst_report"
+                else DocumentType.SEC_FILING
+            )
+            chunks = ingestion_pipeline.ingest_pdf(
+                file_path=args.ingest_pdf,
+                ticker=args.ticker,
+                source_type=doc_type,
+            )
+            console.print(f"[green][OK][/green] Ingested {chunks} chunks from {args.ingest_pdf}")
+            sys.exit(0)
+        except Exception as e:
+            console.print(f"[red]PDF ingestion failed:[/red] {e}")
+            sys.exit(1)
+
+    # --ingest-transcript is also a standalone action
+    if args.ingest_transcript:
+        ingestion_pipeline = phase2_components.get("ingestion_pipeline")
+        if not ingestion_pipeline:
+            console.print("[red]Ingestion pipeline unavailable — cannot ingest transcript.[/red]")
+            sys.exit(1)
+        try:
+            content = Path(args.ingest_transcript).read_text(encoding="utf-8")
+            chunks = ingestion_pipeline.ingest_earnings_transcript(
+                content=content,
+                ticker=args.ticker,
+                fiscal_period=args.fiscal_period,
+            )
+            console.print(f"[green][OK][/green] Ingested {chunks} chunks from {args.ingest_transcript}")
+            sys.exit(0)
+        except Exception as e:
+            console.print(f"[red]Transcript ingestion failed:[/red] {e}")
+            sys.exit(1)
 
     # Initialize Phase 3 systems
     phase3_components = initialize_phase3_systems()

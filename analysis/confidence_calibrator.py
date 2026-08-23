@@ -59,6 +59,10 @@ SOURCE_FAMILIES: dict[str, str] = {
     # basis the D4 fix removed. Phase 7's EDGAR is the first real second family.
     "get_price_history": "yfinance",
     "get_market_context": "yfinance",
+    # Phase 7.1 — the first genuinely independent family. SEC EDGAR reads
+    # filed XBRL data, not yfinance, so this is where SOURCE_DIVERSITY_FACTOR
+    # can finally reach 2 rather than being permanently capped at 1.
+    "get_sec_filings": "sec_edgar",
 }
 
 # distinct source families -> multiplier on data completeness

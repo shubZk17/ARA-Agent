@@ -30,6 +30,7 @@ data/evaluations/
 data/telemetry/
 data/benchmarks/
 data/failures/
+data/sec/
 
 # Reports (locally generated)
 reports/
