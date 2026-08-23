@@ -36,9 +36,15 @@ from typing import Any, Optional
 
 from knowledge.ingestion.chunker import TextChunker
 from knowledge.ingestion.cleaners import clean_text
-from knowledge.ingestion.loaders import load_tool_output, load_news_article, load_research_note
+from knowledge.ingestion.loaders import (
+    load_earnings_transcript,
+    load_news_article,
+    load_pdf_document,
+    load_research_note,
+    load_tool_output,
+)
 from knowledge.retrieval.embeddings import EmbeddingPipeline
-from knowledge.retrieval.schemas import Chunk, Document
+from knowledge.retrieval.schemas import Chunk, Document, DocumentType
 from knowledge.retrieval.vector_store import VectorStoreBase
 from utils.logger import get_logger
 
@@ -220,5 +226,46 @@ class IngestionPipeline:
             content=content,
             ticker=ticker,
             title=title,
+        )
+        return self.ingest_document(document)
+
+    def ingest_pdf(
+        self,
+        file_path: str,
+        ticker: str = "",
+        title: str = "",
+        source_type: DocumentType = DocumentType.SEC_FILING,
+        source_name: str = "sec_filing_pdf",
+    ) -> int:
+        """
+        Ingest a PDF's embedded text layer (10-K/10-Q, investor deck).
+
+        Phase 7.2. Raises ValueError (propagated, not swallowed) if the file
+        can't be read or has no extractable text — the caller decides what
+        to tell the user, since this may be an interactive CLI flag or an
+        API upload.
+        """
+        document = load_pdf_document(
+            file_path=file_path,
+            ticker=ticker,
+            title=title,
+            source_type=source_type,
+            source_name=source_name,
+        )
+        return self.ingest_document(document)
+
+    def ingest_earnings_transcript(
+        self,
+        content: str,
+        ticker: str = "",
+        title: str = "",
+        fiscal_period: str = "",
+    ) -> int:
+        """Ingest a plain-text earnings call transcript. Phase 7.3."""
+        document = load_earnings_transcript(
+            content=content,
+            ticker=ticker,
+            title=title,
+            fiscal_period=fiscal_period,
         )
         return self.ingest_document(document)

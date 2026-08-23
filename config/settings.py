@@ -155,6 +155,18 @@ class Settings:
         default_factory=lambda: os.getenv("ENABLE_EVALUATION", "true").lower() == "true"
     )
 
+    # --- Phase 7: SEC EDGAR ---
+    # SEC requires a descriptive User-Agent identifying a real contact — an
+    # unset/generic one gets 403'd. https://www.sec.gov/os/webmaster-faq#developers
+    sec_edgar_user_agent: str = field(
+        default_factory=lambda: os.getenv(
+            "SEC_EDGAR_USER_AGENT", "ARA-1 Research Agent set-SEC_EDGAR_USER_AGENT@example.com"
+        )
+    )
+    sec_edgar_cache_dir: Path = field(
+        default_factory=lambda: _PROJECT_ROOT / "data" / "sec"
+    )
+
     # --- Phase 4: API Server ---
     api_host: str = field(
         default_factory=lambda: os.getenv("API_HOST", "0.0.0.0")
@@ -206,6 +218,13 @@ class Settings:
                 "No OPENAI_API_KEY — using the local all-MiniLM-L6-v2 model for "
                 "embeddings (free, offline after first download). Set the key "
                 "only if you specifically want OpenAI embeddings."
+            )
+
+        if "example.com" in self.sec_edgar_user_agent:
+            notices.append(
+                "SEC_EDGAR_USER_AGENT is unset — get_sec_filings will 403. Set it "
+                "in .env to 'YourApp your-real-email@domain.com' (SEC requires a "
+                "real contact, not a placeholder)."
             )
 
         return notices

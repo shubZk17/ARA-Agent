@@ -25,6 +25,7 @@ DESIGN DECISIONS:
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from knowledge.retrieval.schemas import Document, DocumentType, SourceTier
@@ -45,6 +46,10 @@ SOURCE_TIER_MAP: dict[str, SourceTier] = {
     "get_financial_metrics": SourceTier.TIER_1,
     "get_stock_price": SourceTier.TIER_1,
     "get_company_info": SourceTier.TIER_1,
+    "get_sec_filings": SourceTier.TIER_1,
+    "sec_filing_pdf": SourceTier.TIER_1,
+    "investor_deck": SourceTier.TIER_2,   # company-issued, not audited like a 10-K
+    "earnings_transcript": SourceTier.TIER_1,
 
     # Tier 2 — Established media
     "reuters": SourceTier.TIER_2,
@@ -101,6 +106,7 @@ def load_tool_output(
         "get_company_info": DocumentType.FINANCIAL_DATA,
         "get_financial_metrics": DocumentType.FINANCIAL_DATA,
         "get_news": DocumentType.NEWS_ARTICLE,
+        "get_sec_filings": DocumentType.SEC_FILING,
     }
 
     doc = Document(
@@ -161,6 +167,119 @@ def load_news_article(
     )
 
     logger.debug(f"Loaded news article: {doc.id} ({title[:50]}...)")
+    return doc
+
+
+# ===================================================================
+# PDF Loader (Phase 7.2)
+# ===================================================================
+
+def load_pdf_document(
+    file_path: str,
+    ticker: str = "",
+    title: str = "",
+    source_type: DocumentType = DocumentType.SEC_FILING,
+    source_name: str = "sec_filing_pdf",
+    document_date: str = "",
+) -> Document:
+    """
+    Extract the embedded text layer of a PDF (10-K/10-Q, investor deck) as
+    a Document.
+
+    Text-layer extraction only — no OCR. That is the defensible slice of
+    "multi-modal" plan.md 7.2 asks for (~95% of real filings and decks are
+    born-digital), not a scanned-image pipeline. A page pdfplumber can't
+    extract text from is either genuinely scanned or blank; either way we
+    can't recover it here, so it's dropped and counted rather than silently
+    producing a shorter document that looks complete.
+
+    Raises:
+        ValueError if the file can't be opened as a PDF, or if every page
+        comes back empty (almost certainly a scanned document — flag it as
+        an error rather than ingesting a documentation of nothing).
+    """
+    import pdfplumber
+
+    try:
+        with pdfplumber.open(file_path) as pdf:
+            page_texts = [page.extract_text() or "" for page in pdf.pages]
+    except Exception as e:
+        raise ValueError(f"Could not read PDF '{file_path}': {e}") from e
+
+    total_pages = len(page_texts)
+    empty_pages = sum(1 for t in page_texts if not t.strip())
+    if total_pages == 0 or empty_pages == total_pages:
+        raise ValueError(
+            f"'{file_path}' has no extractable text ({total_pages} pages, all "
+            f"empty) — likely a scanned document. OCR is not implemented; "
+            f"re-export or find a text-layer version."
+        )
+
+    if empty_pages > total_pages * 0.3:
+        logger.warning(
+            f"'{file_path}': {empty_pages}/{total_pages} pages had no "
+            f"extractable text — likely partially scanned. Extraction is "
+            f"incomplete, not wrong; treat coverage as partial."
+        )
+
+    content = "\n\n".join(t for t in page_texts if t.strip())
+
+    doc = Document(
+        content=content,
+        title=title or Path(file_path).stem,
+        source_type=source_type,
+        source_name=source_name,
+        source_tier=get_source_tier(source_name),
+        ticker=ticker.upper() if ticker else "",
+        document_date=document_date or datetime.now(timezone.utc).isoformat(),
+        extra_metadata={
+            "total_pages": total_pages,
+            "empty_pages": empty_pages,
+            "original_path": str(file_path),
+        },
+    )
+
+    logger.info(
+        f"Loaded PDF as document: {doc.id} ({total_pages} pages, "
+        f"{empty_pages} empty, {source_type})"
+    )
+    return doc
+
+
+# ===================================================================
+# Earnings Transcript Loader (Phase 7.3)
+# ===================================================================
+
+def load_earnings_transcript(
+    content: str,
+    ticker: str = "",
+    title: str = "",
+    fiscal_period: str = "",
+    published_date: str = "",
+) -> Document:
+    """
+    Load an earnings call transcript (plain text) as a Document.
+
+    Text-only — no audio/video processing. Transcripts are typically pasted
+    or downloaded as plain text (investor relations pages, transcript
+    services); the loader doesn't fetch them, it only standardizes whatever
+    text is handed to it into the same Document shape as every other source.
+    """
+    if not content or not content.strip():
+        raise ValueError("Transcript content is empty.")
+
+    doc = Document(
+        content=content,
+        title=title or f"Earnings call transcript — {ticker} {fiscal_period}".strip(),
+        source_type=DocumentType.EARNINGS_TRANSCRIPT,
+        source_name="earnings_transcript",
+        source_tier=get_source_tier("earnings_transcript"),
+        ticker=ticker.upper() if ticker else "",
+        document_date=published_date or datetime.now(timezone.utc).isoformat(),
+        extra_metadata={"fiscal_period": fiscal_period} if fiscal_period else {},
+    )
+
+    logger.info(f"Loaded earnings transcript: {doc.id} ({ticker} {fiscal_period})")
     return doc
 
 

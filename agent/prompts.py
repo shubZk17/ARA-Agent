@@ -130,6 +130,9 @@ CRITICAL RULES
    - Recent news and market context          (get_news)
    - Price trend, momentum, volatility       (get_price_history)
    - Performance vs the market and sector    (get_market_context)
+   - Filed financials from SEC EDGAR, independent of the sources above,
+     when you want to corroborate a figure (get_sec_filings — optional,
+     not always available; do not stop your analysis if it errors)
 
    {horizon_directive}
 
