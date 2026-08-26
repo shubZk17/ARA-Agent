@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ARA-1 — Investment Research Agent</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">ARA</span>
+      <span class="brand-sub">Autonomous Research Agent</span>
+    </div>
+    <div id="backend-status" class="status status--unknown">checking backend…</div>
+  </header>
+
+  <main class="layout">
+    <section class="panel query-panel">
+      <h1>Analyze a company</h1>
+      <p class="hint">Ask a research question. The agent gathers evidence with real tools (price, fundamentals, filings, news), then runs a deterministic synthesis pipeline — it does not just ask an LLM for an opinion.</p>
+
+      <form id="analyze-form">
+        <label for="query">Research question</label>
+        <input id="query" name="query" type="text" placeholder="Analyze NVDA for investment potential" required />
+
+        <div class="row">
+          <div class="field">
+            <label for="horizon">Horizon</label>
+            <select id="horizon" name="horizon">
+              <option value="long_term" selected>Long term (1–5y)</option>
+              <option value="short_term">Short term (1w–3m)</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="risk_profile">Risk profile</label>
+            <select id="risk_profile" name="risk_profile">
+              <option value="conservative">Conservative</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="aggressive">Aggressive</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="submit-btn" type="submit">Run analysis</button>
+      </form>
+
+      <div id="run-status" class="run-status hidden">
+        <div class="spinner"></div>
+        <span id="run-status-text">Running the ReAct loop — this can take a minute or two…</span>
+      </div>
+
+      <div id="error-banner" class="error-banner hidden"></div>
+    </section>
+
+    <section class="panel result-panel">
+      <h2>Result</h2>
+      <div id="result-empty" class="empty">No analysis run yet.</div>
+      <div id="result-content" class="hidden">
+        <div class="result-head">
+          <span id="result-ticker" class="ticker"></span>
+          <span id="result-status" class="badge"></span>
+        </div>
+
+        <div class="stat-grid">
+          <div class="stat"><span class="stat-value" id="stat-iterations">–</span><span class="stat-label">iterations</span></div>
+          <div class="stat"><span class="stat-value" id="stat-tools">–</span><span class="stat-label">tool calls</span></div>
+          <div class="stat"><span class="stat-value" id="stat-time">–</span><span class="stat-label">seconds</span></div>
+          <div class="stat"><span class="stat-value" id="stat-eval">–</span><span class="stat-label">eval score</span></div>
+        </div>
+
+        <h3>Final answer</h3>
+        <div id="result-answer" class="answer"></div>
+
+        <div id="result-errors" class="errors hidden">
+          <h3>Errors</h3>
+          <ul id="result-errors-list"></ul>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel reports-panel">
+      <h2>Recent reports</h2>
+      <div id="reports-list" class="reports-list">
+        <div class="empty">Loading…</div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>
