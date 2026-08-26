@@ -74,6 +74,35 @@ SOURCE_DIVERSITY_FACTOR: dict[int, float] = {
 }
 
 
+# Phase 8.4: below this many graded outcomes, a measured hit rate is noise,
+# not signal — stay on the heuristic constant instead of chasing it.
+MIN_GRADED_SAMPLE = 10
+
+
+def _empirical_reliability_baseline(default: float) -> float:
+    """
+    Phase 8.4: replace a heuristic fallback constant with the system's OWN
+    measured hit rate, once Phase 8.1 has graded enough recommendations to
+    trust it. A 50% hit rate (coin flip) reproduces `default` unchanged;
+    measured skill above or below that shifts the baseline directly.
+
+    Defensive on purpose: this only ever touches the two "we have no actual
+    measurement" fallbacks below. A missing/empty/corrupt outcome log must
+    never break confidence scoring, so any failure here just returns
+    `default`, exactly as if Phase 8 had not shipped.
+    """
+    try:
+        from validation.outcome_scorer import summarize
+        from validation.recommendation_store import RecommendationStore
+
+        summary = summarize(RecommendationStore().load_all())
+        if summary.get("graded_count", 0) < MIN_GRADED_SAMPLE:
+            return default
+        return max(0.1, min(0.95, default + (summary["hit_rate"] - 0.5)))
+    except Exception:
+        return default
+
+
 def _embeddings_degraded() -> bool:
     """
     Whether retrieval ran on meaningless hash vectors this process.
@@ -253,9 +282,9 @@ class ConfidenceCalibrator:
                 if hasattr(tc, "success") and tc.success
             )
             penalties.append("Source reliability estimated, not measured")
-            return min(0.7, 0.4 + succeeded * 0.1)
+            return min(0.7, _empirical_reliability_baseline(0.4) + succeeded * 0.1)
 
-        return 0.5
+        return _empirical_reliability_baseline(0.5)
 
     def _score_data_completeness(
         self,
@@ -331,7 +360,7 @@ class ConfidenceCalibrator:
             #
             # Absence of evidence is not evidence of absence. Until Phase 6
             # adds a source that can genuinely disagree, this stays neutral.
-            score = 0.6
+            score = _empirical_reliability_baseline(0.6)
             penalties.append(
                 "Consistency unmeasured — all evidence comes from a single "
                 "data source, so cross-source agreement cannot be assessed"
