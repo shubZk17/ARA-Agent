@@ -165,6 +165,38 @@ class RecommendationStore:
             if r.get("outcome") is None and (r.get("review_by_date") or "9999") <= today
         ]
 
+    def mark_outcome(self, record_id: str, outcome: dict[str, Any]) -> bool:
+        """
+        Fill in one record's `outcome` field in place (Phase 8.1's scorer).
+
+        Not a new JSONL line: `outcome` was reserved as null from the start
+        for exactly this update (see the module docstring). Only the month
+        file containing the id is rewritten. Returns True if the id was found.
+        """
+        found = False
+        for path in sorted(self._dir.glob("recommendations_*.jsonl")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            changed = False
+            new_lines = []
+            for line in lines:
+                if not line.strip():
+                    new_lines.append(line)
+                    continue
+                try:
+                    rec = json.loads(line)
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+                    continue
+                if rec.get("id") == record_id:
+                    rec["outcome"] = outcome
+                    changed = True
+                    found = True
+                new_lines.append(json.dumps(rec, ensure_ascii=False))
+            if changed:
+                path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+                return True
+        return found
+
 
 def record_recommendation(report) -> Optional[dict[str, Any]]:
     """
