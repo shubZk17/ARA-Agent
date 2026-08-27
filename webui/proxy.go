@@ -95,6 +95,54 @@ func (p *backendProxy) handleAnalyze(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// handleEvaluate proxies POST /api/evaluate — same body-passthrough,
+// long-timeout shape as handleAnalyze, since it also runs the full agent.
+func (p *backendProxy) handleEvaluate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAnalyzeBody)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "request body too large or unreadable")
+		return
+	}
+
+	req, err := http.NewRequest(http.MethodPost, p.baseURL+"/evaluate", strings.NewReader(string(body)))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build upstream request")
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := p.longClient.Do(req)
+	if err != nil {
+		if errors.Is(err, http.ErrHandlerTimeout) || isTimeout(err) {
+			writeError(w, http.StatusGatewayTimeout,
+				"evaluation took too long (over 5 minutes) — the LLM provider may be rate-limited or unresponsive")
+			return
+		}
+		writeError(w, http.StatusBadGateway,
+			"could not reach the analysis backend at "+p.baseURL+" — is `uvicorn api.server:app` running?")
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// handleConfig proxies GET /api/config — same shape as handleListReports.
+func (p *backendProxy) handleConfig(w http.ResponseWriter, r *http.Request) {
+	resp, err := p.fastClient.Get(p.baseURL + "/config")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "could not reach the analysis backend")
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
 func (p *backendProxy) handleListReports(w http.ResponseWriter, r *http.Request) {
 	resp, err := p.fastClient.Get(p.baseURL + "/reports")
 	if err != nil {

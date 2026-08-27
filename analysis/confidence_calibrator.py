@@ -63,6 +63,12 @@ SOURCE_FAMILIES: dict[str, str] = {
     # filed XBRL data, not yfinance, so this is where SOURCE_DIVERSITY_FACTOR
     # can finally reach 2 rather than being permanently capped at 1.
     "get_sec_filings": "sec_edgar",
+    # Phase 7.4 — the third family. Tagged distinctly from "sec_edgar" on
+    # purpose, not just because it's a different EDGAR endpoint: Form 4s are
+    # filed by the INSIDER, not the company. A company misstating its
+    # financials doesn't imply an insider misfiles a Form 4 — different
+    # filer, different obligation, genuinely independent failure modes.
+    "get_insider_transactions": "sec_edgar_ownership",
 }
 
 # distinct source families -> multiplier on data completeness

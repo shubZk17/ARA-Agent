@@ -57,6 +57,7 @@ from agent.nodes import (
     set_tool_registry,
     set_ingestion_pipeline,
     set_semantic_retriever,
+    set_observability,
     should_continue,
     tool_node,
 )
@@ -71,6 +72,8 @@ def build_graph(
     tool_registry: ToolRegistry,
     ingestion_pipeline=None,
     semantic_retriever=None,
+    collector=None,
+    tracer=None,
 ) -> StateGraph:
     """
     Build and compile the ReAct agent graph.
@@ -80,6 +83,8 @@ def build_graph(
                        so the graph and its nodes have access to tools.
         ingestion_pipeline: Phase 2 — Pipeline for auto-ingesting tool outputs.
         semantic_retriever: Phase 2 — Retriever for evidence retrieval.
+        collector: Phase 4 — TelemetryCollector, optional. None is a no-op.
+        tracer: Phase 4 — ExecutionTracer, optional. None is a no-op.
 
     Returns:
         Compiled LangGraph StateGraph ready for .invoke().
@@ -102,6 +107,9 @@ def build_graph(
     if semantic_retriever is not None:
         set_semantic_retriever(semantic_retriever)
         logger.info("Phase 2: Semantic retriever connected to graph")
+
+    # Phase 4: Inject observability (no-op inside nodes.py if both are None)
+    set_observability(collector, tracer)
 
     # --- Define the graph ---
     graph = StateGraph(AgentState)

@@ -109,7 +109,10 @@ class AnalysisRequest(BaseModel):
     # existed keep working and keep getting the long-term view they got before.
     horizon: str = Field(
         default="long_term",
-        description="Investment horizon: 'short_term' (1w-3m) or 'long_term' (1-5y)",
+        description=(
+            "Investment horizon: 'short_term' (1w-3m), 'medium_term' (3mo-1y), "
+            "or 'long_term' (1-5y)"
+        ),
     )
     risk_profile: str = Field(
         default="balanced",
@@ -131,6 +134,10 @@ class AnalysisResponse(BaseModel):
     evaluation_score: float = 0.0
     tool_calls: int = 0
     errors: list[str] = []
+    # Phase 3 synthesis, when available — confidence breakdown, the dated
+    # HorizonRecommendation (invalidation condition, review date), risk
+    # detail. None if synthesis wasn't run or failed (non-fatal).
+    report: Optional[dict] = None
 
 
 class HealthResponse(BaseModel):
@@ -160,6 +167,7 @@ class EvaluationResponse(BaseModel):
 _startup_time = time.time()
 _phase2_components: dict = {}
 _phase3_components: dict = {}
+_phase4_components: dict = {}
 _last_telemetry: dict = {}
 
 
@@ -192,16 +200,27 @@ async def run_analysis(request: AnalysisRequest):
     4. Returns structured results.
     """
     try:
-        from main import run_agent, initialize_phase2_systems, initialize_phase3_systems
+        from main import (
+            run_agent, initialize_phase2_systems, initialize_phase3_systems,
+            initialize_phase4_systems,
+        )
 
         start = time.time()
 
         # Initialize systems (cached after first call)
-        global _phase2_components, _phase3_components
+        global _phase2_components, _phase3_components, _phase4_components
         if not _phase2_components:
             _phase2_components = initialize_phase2_systems()
         if not _phase3_components:
             _phase3_components = initialize_phase3_systems()
+        if not _phase4_components:
+            try:
+                _phase4_components = initialize_phase4_systems()
+            except Exception as e:
+                logger.warning(f"Phase 4 (observability) init failed (non-fatal): {e}")
+
+        collector = _phase4_components.get("collector")
+        tracer = _phase4_components.get("tracer")
 
         # Run agent
         final_state = run_agent(
@@ -209,6 +228,8 @@ async def run_analysis(request: AnalysisRequest):
             _phase2_components,
             horizon=request.horizon,
             risk_profile=request.risk_profile,
+            collector=collector,
+            tracer=tracer,
         )
         elapsed = time.time() - start
 
@@ -231,6 +252,18 @@ async def run_analysis(request: AnalysisRequest):
             tool_calls=len(final_state.get("tool_calls", [])),
             errors=final_state.get("errors", []),
         )
+
+        # Run Phase 3 synthesis, non-fatal — the docstring above has promised
+        # this since the endpoint was written, but nothing ever called it.
+        synthesis_engine = _phase3_components.get("synthesis_engine")
+        if synthesis_engine:
+            try:
+                from validation import record_recommendation
+                report = synthesis_engine.synthesize(final_state, collector=collector)
+                record_recommendation(report)
+                response.report = report.model_dump(mode="json")
+            except Exception as e:
+                logger.warning(f"Synthesis failed (non-fatal): {e}")
 
         # Run evaluation if requested
         if request.enable_evaluation:

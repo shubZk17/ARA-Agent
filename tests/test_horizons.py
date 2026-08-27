@@ -58,7 +58,7 @@ def test_the_two_horizons_disagree_about_what_matters():
     assert short.review_days < long_term.review_days
 
 
-@pytest.mark.parametrize("value", ["", None, "medium_term", "LONG_TERM  "])
+@pytest.mark.parametrize("value", ["", None, "quarterly", "LONG_TERM  "])
 def test_unknown_horizons_fall_back_rather_than_raise(value):
     """
     Horizons arrive from CLI flags, HTTP bodies and replayed episodic state.
@@ -66,6 +66,19 @@ def test_unknown_horizons_fall_back_rather_than_raise(value):
     """
     assert get_horizon_profile(value).horizon in HORIZON_PROFILES
     assert get_risk_profile(value).profile in RISK_PROFILES
+
+
+def test_medium_term_required_tools_are_not_a_trivial_super_or_subset():
+    """
+    MEDIUM_TERM must genuinely disagree with both neighbors about what
+    evidence matters, not just interpolate between their sets.
+    """
+    short = set(HORIZON_PROFILES["short_term"].required_tools)
+    medium = set(HORIZON_PROFILES["medium_term"].required_tools)
+    long_term = set(HORIZON_PROFILES["long_term"].required_tools)
+
+    assert not medium <= short and not short <= medium
+    assert not medium <= long_term and not long_term <= medium
 
 
 def test_horizon_strings_round_trip_through_json():

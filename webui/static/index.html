@@ -29,6 +29,7 @@
             <label for="horizon">Horizon</label>
             <select id="horizon" name="horizon">
               <option value="long_term" selected>Long term (1–5y)</option>
+              <option value="medium_term">Medium term (3mo–1y)</option>
               <option value="short_term">Short term (1w–3m)</option>
             </select>
           </div>
@@ -67,6 +68,17 @@
           <div class="stat"><span class="stat-value" id="stat-tools">–</span><span class="stat-label">tool calls</span></div>
           <div class="stat"><span class="stat-value" id="stat-time">–</span><span class="stat-label">seconds</span></div>
           <div class="stat"><span class="stat-value" id="stat-eval">–</span><span class="stat-label">eval score</span></div>
+        </div>
+
+        <div id="result-report" class="report hidden">
+          <h3>Synthesis</h3>
+          <div class="stat-grid">
+            <div class="stat"><span class="stat-value" id="report-outlook">–</span><span class="stat-label">outlook</span></div>
+            <div class="stat"><span class="stat-value" id="report-confidence">–</span><span class="stat-label">confidence</span></div>
+            <div class="stat"><span class="stat-value" id="report-risk">–</span><span class="stat-label">risk level</span></div>
+            <div class="stat"><span class="stat-value" id="report-review-date">–</span><span class="stat-label">review by</span></div>
+          </div>
+          <p class="hint"><strong>Invalidated if:</strong> <span id="report-invalidation"></span></p>
         </div>
 
         <h3>Final answer</h3>

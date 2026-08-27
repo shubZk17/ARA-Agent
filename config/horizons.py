@@ -40,6 +40,7 @@ from enum import Enum
 class InvestmentHorizon(str, Enum):
     """How long the recommendation is meant to be held."""
     SHORT_TERM = "short_term"   # 1 week – 3 months (swing)
+    MEDIUM_TERM = "medium_term" # 3 months – 1 year (earnings-cycle)
     LONG_TERM = "long_term"     # 1 – 5 years
 
 
@@ -134,6 +135,52 @@ HORIZON_PROFILES: dict[str, HorizonProfile] = {
             "current news flow most heavily. Valuation matters only as a guard against "
             "extremes. You MUST call get_price_history and get_news for this horizon. "
             "State a specific entry condition and the level at which the trade is wrong."
+        ),
+    ),
+    InvestmentHorizon.MEDIUM_TERM.value: HorizonProfile(
+        horizon=InvestmentHorizon.MEDIUM_TERM.value,
+        label="Medium term (3 months – 1 year)",
+        lookback_days=365,
+        # Earnings-cycle driven: neither pure trend (short) nor pure
+        # multi-year compounding (long). Technical still matters — a name
+        # can be fundamentally sound and still be mid-drawdown for a year —
+        # but fundamentals now carry real weight because a quarter or two of
+        # results will actually land inside the holding period.
+        category_weights={
+            "valuation": 0.15,
+            "profitability": 0.15,
+            "growth": 0.15,
+            "liquidity": 0.07,
+            "leverage": 0.08,
+            "technical": 0.25,
+            "sentiment": 0.15,
+        },
+        metric_threshold_overrides={
+            "trailing_pe": (22.0, 50.0),
+            "price_to_book": (3.5, 15.0),
+        },
+        # Deliberately not a superset/subset of either neighbor's set: swaps
+        # short_term's get_news for get_market_context (relative performance
+        # and beta matter more over a multi-quarter hold than one news cycle)
+        # and swaps long_term's get_company_info for the same tool (a year
+        # is too short for competitive-position writeups to matter, but long
+        # enough that how the stock has moved against its sector does).
+        required_tools=(
+            "get_stock_price", "get_price_history",
+            "get_financial_metrics", "get_market_context",
+        ),
+        sentiment_decay_days=45,
+        target_holding_period_text="3 months to 1 year",
+        review_days=60,
+        prompt_directive=(
+            "HORIZON: MEDIUM TERM (3 months to 1 year, earnings-cycle hold).\n"
+            "   Weight technical positioning and near-term fundamentals roughly "
+            "equally — a name can be cheap and still be in a drawdown, and a "
+            "strong chart does not survive a bad quarter. At least one earnings "
+            "cycle will land inside the holding period, so weigh recent results "
+            "and guidance more than a single news event or a five-year growth "
+            "story. You MUST call get_financial_metrics and get_market_context "
+            "for this horizon."
         ),
     ),
     InvestmentHorizon.LONG_TERM.value: HorizonProfile(

@@ -42,10 +42,12 @@ DESIGN PRINCIPLE:
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from datetime import date, timedelta
 from typing import Any
 
 from config.settings import settings
+from quality.observability.collector import EventType
 from config.horizons import (
     DEFAULT_HORIZON,
     DEFAULT_RISK_PROFILE,
@@ -100,18 +102,22 @@ class SynthesisEngine:
 
         logger.info("Synthesis engine initialized with all sub-engines")
 
-    def synthesize(self, agent_state: dict) -> SynthesisReport:
+    def synthesize(self, agent_state: dict, collector=None) -> SynthesisReport:
         """
         Run the full synthesis pipeline on completed agent state.
 
         Args:
             agent_state: Final state dict from graph.invoke().
                 Must contain: tool_calls, reasoning_trace, query, etc.
+            collector: Phase 4 — TelemetryCollector, optional. None is a no-op.
 
         Returns:
             SynthesisReport with all engine outputs and investment thesis.
         """
         start = time.time()
+
+        def _stage(name):
+            return collector.track(EventType.SYNTHESIS_STEP, name) if collector else nullcontext()
 
         # Extract inputs from state
         tool_calls = agent_state.get("tool_calls", [])
@@ -137,52 +143,59 @@ class SynthesisEngine:
 
         # --- Step 1: Financial Analysis ---
         logger.info("[1/7] Running financial analysis engine...")
-        financial = self._financial.analyze(tool_calls, observations, profile)
+        with _stage("financial_analysis"):
+            financial = self._financial.analyze(tool_calls, observations, profile)
 
         # --- Step 2: Technical Analysis (Phase 6) ---
         logger.info("[2/7] Running technical analysis engine...")
-        technical = self._technical.analyze(tool_calls, profile)
+        with _stage("technical_analysis"):
+            technical = self._technical.analyze(tool_calls, profile)
 
         # --- Step 3: Sentiment Analysis ---
         logger.info("[3/7] Running sentiment analyzer...")
-        sentiment = self._sentiment.analyze(tool_calls, observations)
+        with _stage("sentiment_analysis"):
+            sentiment = self._sentiment.analyze(tool_calls, observations)
 
         # --- Step 4: Misalignment Detection ---
         logger.info("[4/7] Running misalignment detector...")
-        misalignment = self._misalignment.detect(financial, sentiment)
+        with _stage("misalignment_detection"):
+            misalignment = self._misalignment.detect(financial, sentiment)
 
         # --- Step 5: Risk Analysis ---
         logger.info("[5/7] Running risk analyzer...")
-        risk = self._risk.analyze(financial, sentiment, misalignment, technical)
+        with _stage("risk_analysis"):
+            risk = self._risk.analyze(financial, sentiment, misalignment, technical)
 
         # --- Step 6: Confidence Calibration ---
         logger.info("[6/7] Calibrating confidence...")
-        confidence = self._confidence.calibrate(
-            financial=financial,
-            sentiment=sentiment,
-            risk=risk,
-            misalignment=misalignment,
-            agent_state=agent_state,
-        )
+        with _stage("confidence_calibration"):
+            confidence = self._confidence.calibrate(
+                financial=financial,
+                sentiment=sentiment,
+                risk=risk,
+                misalignment=misalignment,
+                agent_state=agent_state,
+            )
 
         # --- Step 7: Investment Thesis & Dated Recommendation ---
         logger.info("[7/7] Generating investment thesis...")
-        outlook = self._determine_outlook(
-            financial, sentiment, risk, misalignment, confidence,
-            technical, profile, risk_profile,
-        )
-        recommendation = self._build_recommendation(
-            outlook, financial, technical, profile, risk_profile, confidence,
-            price_now=self._latest_quote(tool_calls),
-        )
-        thesis = self._generate_thesis(
-            financial, sentiment, risk, misalignment, confidence, outlook,
-            technical, profile, recommendation,
-        )
-        key_findings = self._extract_key_findings(
-            financial, sentiment, misalignment, risk, technical
-        )
-        contradictions = self._extract_contradictions(agent_state, misalignment)
+        with _stage("investment_thesis"):
+            outlook = self._determine_outlook(
+                financial, sentiment, risk, misalignment, confidence,
+                technical, profile, risk_profile,
+            )
+            recommendation = self._build_recommendation(
+                outlook, financial, technical, profile, risk_profile, confidence,
+                price_now=self._latest_quote(tool_calls),
+            )
+            thesis = self._generate_thesis(
+                financial, sentiment, risk, misalignment, confidence, outlook,
+                technical, profile, recommendation,
+            )
+            key_findings = self._extract_key_findings(
+                financial, sentiment, misalignment, risk, technical
+            )
+            contradictions = self._extract_contradictions(agent_state, misalignment)
 
         # --- Assemble Report ---
         elapsed = time.time() - start

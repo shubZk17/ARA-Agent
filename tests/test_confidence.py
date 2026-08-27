@@ -8,6 +8,8 @@ the behaviour that makes the number move.
 
 from __future__ import annotations
 
+import pytest
+
 from analysis.confidence_calibrator import ConfidenceCalibrator
 from analysis.schemas import (
     FinancialSnapshot,
@@ -77,6 +79,35 @@ def test_single_source_costs_data_completeness():
     score = _calibrate()
     assert score.data_completeness < 1.0
     assert any("Single data source" in p for p in score.penalties)
+
+
+def test_three_source_families_reach_full_diversity_factor():
+    """
+    Phase 7.4 — get_insider_transactions is tagged a genuinely distinct
+    family ("sec_edgar_ownership") from get_sec_filings ("sec_edgar"), so
+    3 independent families are now reachable and SOURCE_DIVERSITY_FACTOR[3]
+    (1.00) applies instead of being capped at [2] (0.90).
+    """
+    calibrator = ConfidenceCalibrator()
+    ideal_tools = [
+        "get_stock_price", "get_financial_metrics", "get_company_info",
+        "get_news", "get_price_history",
+    ]
+
+    two_families = calibrator._score_data_completeness(
+        {"tool_calls": [_Call(t) for t in ideal_tools] + [_Call("get_sec_filings")]},
+        [], [],
+    )
+    three_families = calibrator._score_data_completeness(
+        {
+            "tool_calls": [_Call(t) for t in ideal_tools]
+            + [_Call("get_sec_filings"), _Call("get_insider_transactions")]
+        },
+        [], [],
+    )
+
+    assert three_families > two_families
+    assert three_families == pytest.approx(1.0)
 
 
 def test_thin_evidence_scores_far_below_complete_evidence():

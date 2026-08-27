@@ -61,6 +61,33 @@ function renderResult(data) {
   } else {
     errorsBox.classList.add("hidden");
   }
+
+  renderReport(data.report);
+}
+
+// The full Phase 3 SynthesisReport, when synthesis ran and succeeded — same
+// fields the CLI's Rich table shows (outlook, confidence, risk,
+// invalidation condition, review date).
+function renderReport(report) {
+  const box = $("result-report");
+  if (!report) {
+    box.classList.add("hidden");
+    return;
+  }
+  box.classList.remove("hidden");
+
+  const rec = report.recommendation || {};
+  const confidence = report.confidence || {};
+  const risk = report.risk || {};
+
+  $("report-outlook").textContent = (report.outlook || "—").toUpperCase().replace(/_/g, " ");
+  $("report-confidence").textContent =
+    confidence.overall != null
+      ? `${Math.round(confidence.overall * 100)}% (${confidence.label || ""})`
+      : "—";
+  $("report-risk").textContent = risk.overall_risk_level || "—";
+  $("report-invalidation").textContent = rec.invalidation_condition || "Not specified.";
+  $("report-review-date").textContent = rec.review_by_date || "—";
 }
 
 async function loadReports() {

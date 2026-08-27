@@ -58,6 +58,7 @@ from config.horizons import (
     get_horizon_profile,
 )
 from tools.registry import ToolRegistry
+from quality.observability.collector import EventType
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -146,6 +147,22 @@ def set_semantic_retriever(retriever) -> None:
     """Set the semantic retriever for evidence retrieval."""
     global _semantic_retriever
     _semantic_retriever = retriever
+
+
+# ===================================================================
+# Phase 4 (wired 2026-08-27): Module-level references for observability.
+# Both default to None so an unset collector/tracer is a pure no-op —
+# nodes must behave identically whether or not a caller wires telemetry.
+# ===================================================================
+_collector = None
+_tracer = None
+
+
+def set_observability(collector, tracer) -> None:
+    """Set the telemetry collector and execution tracer for node functions."""
+    global _collector, _tracer
+    _collector = collector
+    _tracer = tracer
 
 
 # ===================================================================
@@ -243,13 +260,22 @@ def reasoning_node(state: AgentState) -> dict[str, Any]:
         )))
 
     # Call LLM
+    span = _tracer.start_span("reasoning_llm", "llm", iteration=iteration) if _tracer else None
     try:
         logger.debug(f"Calling LLM with {len(messages)} messages")
         llm = _get_llm()
-        response = llm.invoke(messages)
+        if _collector:
+            with _collector.track(EventType.LLM_CALL, "reasoning_llm", iteration=iteration):
+                response = llm.invoke(messages)
+        else:
+            response = llm.invoke(messages)
         raw_text = response.content
         logger.debug(f"LLM response: {raw_text[:300]}...")
+        if span:
+            _tracer.end_span(span, output_summary=raw_text[:200])
     except Exception as e:
+        if span:
+            _tracer.end_span(span, success=False, error=str(e))
         error_msg = f"LLM call failed: {type(e).__name__}: {str(e)}"
         logger.error(error_msg)
         return {
@@ -338,7 +364,22 @@ def tool_node(state: AgentState) -> dict[str, Any]:
         return _build_tool_error_update(action, action_input, error_msg, iteration)
 
     # Execute tool
-    result = tool.execute(action_input)
+    span = _tracer.start_span(action, "tool", iteration=iteration) if _tracer else None
+    if _collector:
+        with _collector.track(
+            EventType.TOOL_EXECUTION, action, iteration=iteration,
+            metadata={"input": action_input},
+        ):
+            result = tool.execute(action_input)
+    else:
+        result = tool.execute(action_input)
+    if span:
+        _tracer.end_span(
+            span,
+            output_summary=(result.data[:200] if result.success else result.error),
+            success=result.success,
+            error="" if result.success else result.error,
+        )
 
     if result.success:
         logger.info(f"[bold green]Tool succeeded[/bold green] ({len(result.data)} chars)")

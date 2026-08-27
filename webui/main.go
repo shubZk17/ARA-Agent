@@ -47,6 +47,8 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", proxy.handleHealth)
 	mux.HandleFunc("POST /api/analyze", proxy.handleAnalyze)
+	mux.HandleFunc("POST /api/evaluate", proxy.handleEvaluate)
+	mux.HandleFunc("GET /api/config", proxy.handleConfig)
 	mux.HandleFunc("GET /api/reports", proxy.handleListReports)
 	mux.HandleFunc("GET /api/reports/{filename}", proxy.handleGetReport)
 	mux.Handle("/", http.FileServer(http.Dir(*staticDir)))

@@ -133,6 +133,9 @@ CRITICAL RULES
    - Filed financials from SEC EDGAR, independent of the sources above,
      when you want to corroborate a figure (get_sec_filings — optional,
      not always available; do not stop your analysis if it errors)
+   - Recent insider (Form 4) filing activity from SEC EDGAR, when insider
+     buying/selling activity is relevant (get_insider_transactions —
+     optional, not always available; do not stop your analysis if it errors)
 
    {horizon_directive}
 

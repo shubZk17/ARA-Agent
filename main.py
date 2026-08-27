@@ -73,6 +73,7 @@ from tools.news import NewsRetrievalTool
 from tools.price_history import PriceHistoryTool
 from tools.registry import ToolRegistry
 from tools.sec_filings import SecFilingsTool
+from tools.sec_insider import SecInsiderTool
 from tools.stock_price import StockPriceTool
 from utils.logger import get_logger
 
@@ -129,6 +130,7 @@ def create_tool_registry() -> ToolRegistry:
     registry.register(PriceHistoryTool())      # Phase 6 — price series
     registry.register(MarketContextTool())     # Phase 6 — benchmarks + measured beta
     registry.register(SecFilingsTool())        # Phase 7 — first independent source
+    registry.register(SecInsiderTool())        # Phase 7.4 — second independent family
 
     logger.info(f"Registered {len(registry)} tools: {registry.list_tools()}")
     return registry
@@ -330,6 +332,8 @@ def run_agent(
     phase2_components: dict = None,
     horizon: str = DEFAULT_HORIZON,
     risk_profile: str = DEFAULT_RISK_PROFILE,
+    collector=None,
+    tracer=None,
 ) -> dict:
     """
     Run the ARA-1 agent with the given query.
@@ -340,6 +344,8 @@ def run_agent(
         horizon: Phase 6 — "short_term" or "long_term". Decides which evidence
             the model is told to prioritize and how synthesis weights it.
         risk_profile: Phase 6 — "conservative" / "balanced" / "aggressive".
+        collector: Phase 4 — TelemetryCollector, optional. None is a no-op.
+        tracer: Phase 4 — ExecutionTracer, optional. None is a no-op.
 
     Returns:
         Final agent state dict.
@@ -354,6 +360,8 @@ def run_agent(
         tool_registry=registry,
         ingestion_pipeline=phase2_components.get("ingestion_pipeline"),
         semantic_retriever=phase2_components.get("semantic_retriever"),
+        collector=collector,
+        tracer=tracer,
     )
 
     # 3. Load episodic context (Phase 2)
@@ -901,6 +909,8 @@ def main():
             phase2_components,
             horizon=args.horizon,
             risk_profile=args.risk_profile,
+            collector=collector,
+            tracer=tracer,
         )
         elapsed = time.time() - start_time
         display_results(final_state)
@@ -910,7 +920,7 @@ def main():
         report_paths = None
         if phase3_components and final_state:
             synthesis_report_dict, report_paths = _run_phase3_with_capture(
-                final_state, phase3_components
+                final_state, phase3_components, collector=collector
             )
 
         # Phase 4: Evaluation
@@ -935,6 +945,7 @@ def main():
 def _run_phase3_with_capture(
     final_state: dict,
     phase3_components: dict,
+    collector=None,
 ) -> tuple[dict | None, dict | None]:
     """
     Run Phase 3 synthesis and capture the report + paths for Phase 4.
@@ -951,7 +962,7 @@ def _run_phase3_with_capture(
         console.print("\n[bold cyan]Phase 3: Running synthesis pipeline...[/bold cyan]")
 
         # Run synthesis
-        report = synthesis_engine.synthesize(final_state)
+        report = synthesis_engine.synthesize(final_state, collector=collector)
 
         # Phase 6.6: start the recommendation clock. Deliberately placed HERE
         # rather than in main() — the CLI, Streamlit and the API all route
