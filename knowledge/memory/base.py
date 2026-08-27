@@ -63,7 +63,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ===================================================================
@@ -110,8 +110,8 @@ class MemoryEntry(BaseModel):
         description="Retrieval relevance (0.0-1.0), set during search"
     )
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
+
 
 
 # ===================================================================

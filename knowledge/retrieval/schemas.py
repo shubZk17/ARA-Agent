@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 
 # ===================================================================
@@ -135,8 +135,8 @@ class Document(BaseModel):
         description="Any additional metadata not covered by structured fields"
     )
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
+
 
 
 # ===================================================================
@@ -193,8 +193,8 @@ class Chunk(BaseModel):
         description="Number of tokens in this chunk"
     )
 
-    class Config:
-        use_enum_values = True
+    model_config = ConfigDict(use_enum_values=True)
+
 
     def to_vector_metadata(self) -> dict[str, Any]:
         """
