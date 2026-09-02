@@ -69,50 +69,60 @@ logger = get_logger(__name__)
 MAX_PARSE_RETRIES = 2
 
 # ---------------------------------------------------------------------------
-# Module-level LLM client (initialized lazily)
+# Module-level LLM client
 # ---------------------------------------------------------------------------
+# _llm caches ONLY the default (config/env) client. A per-run override — a
+# user-supplied API key from the web UI — is built fresh each call and never
+# cached, so one visitor's key can't be reused for the next. Set by
+# build_graph() each run, same DI pattern as set_observability().
 _llm = None
+_llm_override: dict | None = None
+
+
+def set_llm_override(override: dict | None) -> None:
+    """Per-run LLM credentials, or None to use config/env.
+
+    Keys (all optional): 'api_key', 'provider' ('groq'|'openai'|'claude'),
+    'model'. Anything absent falls back to config.settings.
+    """
+    global _llm_override
+    _llm_override = override or None
+
+
+def _resolve_llm_config() -> tuple[str, str, str]:
+    """(provider, model, api_key) — override wins field-by-field over settings."""
+    o = _llm_override or {}
+    provider = o.get("provider") or settings.llm_provider
+    if provider == "claude":
+        return provider, o.get("model") or settings.anthropic_model, o.get("api_key") or settings.anthropic_api_key
+    if provider == "groq":
+        return provider, o.get("model") or settings.groq_model, o.get("api_key") or settings.groq_api_key
+    return provider, o.get("model") or settings.openai_model, o.get("api_key") or settings.openai_api_key
+
+
+def _build_llm(provider: str, model: str, api_key: str):
+    if provider == "claude":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(model=model, api_key=api_key, temperature=0.1, max_tokens=4096)
+    if provider == "groq":
+        from langchain_groq import ChatGroq
+        return ChatGroq(model=model, api_key=api_key, temperature=0.1, max_tokens=4096)
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(model=model, api_key=api_key, temperature=0.1, max_tokens=4096)
 
 
 def _get_llm():
-    """
-    Lazy-initialize the LLM client.
-
-    WHY LAZY?
-    - Importing this module shouldn't require valid API keys
-      (helps with testing and IDE support).
-    - The LLM client only needs to exist when we actually call it.
-    """
+    """Lazy LLM client. Lazy so importing this module needs no API key."""
     global _llm
-    if _llm is not None:
-        return _llm
+    provider, model, api_key = _resolve_llm_config()
 
-    if settings.llm_provider == "claude":
-        from langchain_anthropic import ChatAnthropic
-        _llm = ChatAnthropic(
-            model=settings.anthropic_model,
-            api_key=settings.anthropic_api_key,
-            temperature=0.1,        # Low temperature for analytical consistency
-            max_tokens=4096,
-        )
-    elif settings.llm_provider == "groq":
-        from langchain_groq import ChatGroq
-        _llm = ChatGroq(
-            model=settings.groq_model,
-            api_key=settings.groq_api_key,
-            temperature=0.1,
-            max_tokens=4096,
-        )
-    else:
-        from langchain_openai import ChatOpenAI
-        _llm = ChatOpenAI(
-            model=settings.openai_model,
-            api_key=settings.openai_api_key,
-            temperature=0.1,
-            max_tokens=4096,
-        )
+    if _llm_override:
+        # Don't retain a user's key in a module global across runs.
+        return _build_llm(provider, model, api_key)
 
-    logger.info(f"Initialized LLM: {settings.active_model}")
+    if _llm is None:
+        _llm = _build_llm(provider, model, api_key)
+        logger.info(f"Initialized LLM: {model}")
     return _llm
 
 

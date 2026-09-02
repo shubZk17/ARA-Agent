@@ -334,6 +334,7 @@ def run_agent(
     risk_profile: str = DEFAULT_RISK_PROFILE,
     collector=None,
     tracer=None,
+    llm_override=None,
 ) -> dict:
     """
     Run the ARA-1 agent with the given query.
@@ -346,6 +347,8 @@ def run_agent(
         risk_profile: Phase 6 — "conservative" / "balanced" / "aggressive".
         collector: Phase 4 — TelemetryCollector, optional. None is a no-op.
         tracer: Phase 4 — ExecutionTracer, optional. None is a no-op.
+        llm_override: dict with optional 'api_key'/'provider'/'model' — a
+            user-supplied key from the web UI. None → config/env.
 
     Returns:
         Final agent state dict.
@@ -362,6 +365,7 @@ def run_agent(
         semantic_retriever=phase2_components.get("semantic_retriever"),
         collector=collector,
         tracer=tracer,
+        llm_override=llm_override,
     )
 
     # 3. Load episodic context (Phase 2)

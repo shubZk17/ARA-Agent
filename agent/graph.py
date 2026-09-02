@@ -58,6 +58,7 @@ from agent.nodes import (
     set_ingestion_pipeline,
     set_semantic_retriever,
     set_observability,
+    set_llm_override,
     should_continue,
     tool_node,
 )
@@ -74,6 +75,7 @@ def build_graph(
     semantic_retriever=None,
     collector=None,
     tracer=None,
+    llm_override=None,
 ) -> StateGraph:
     """
     Build and compile the ReAct agent graph.
@@ -110,6 +112,11 @@ def build_graph(
 
     # Phase 4: Inject observability (no-op inside nodes.py if both are None)
     set_observability(collector, tracer)
+
+    # Per-run LLM credentials (e.g. a user-supplied API key from the web UI).
+    # None → nodes.py falls back to config/env. Set every build so a prior
+    # run's override never leaks into this one.
+    set_llm_override(llm_override)
 
     # --- Define the graph ---
     graph = StateGraph(AgentState)

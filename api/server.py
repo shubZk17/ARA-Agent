@@ -46,6 +46,7 @@ if sys.platform == "win32":
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 # Add project root to path
@@ -118,6 +119,15 @@ class AnalysisRequest(BaseModel):
         default="balanced",
         description="Risk appetite: 'conservative', 'balanced' or 'aggressive'",
     )
+    # Bring-your-own key. Passed straight through to the agent per-request and
+    # never persisted or logged. If unset, the server's configured key is used.
+    api_key: Optional[str] = Field(default=None, description="Your own LLM API key")
+    llm_provider: Optional[str] = Field(
+        default=None, description="'groq', 'openai' or 'claude' — defaults to server config"
+    )
+    llm_model: Optional[str] = Field(
+        default=None, description="Model name for the chosen provider — defaults to server config"
+    )
     # `enable_failure_injection` removed — quality/evaluation/failure_injector.py
     # was deleted 2026-08-15, so the flag advertised a capability that no
     # longer existed anywhere in the codebase.
@@ -175,6 +185,37 @@ _last_telemetry: dict = {}
 # Endpoints
 # ===================================================================
 
+def _llm_override_from(request: AnalysisRequest) -> Optional[dict]:
+    """Build the per-request LLM override, or None to use server config.
+
+    Raises 400 if neither the request nor the server has a key for the
+    resolved provider — clearer than letting the agent abstain with an
+    opaque auth error.
+    """
+    provider = request.llm_provider or settings.llm_provider
+    server_key = {
+        "groq": settings.groq_api_key,
+        "openai": settings.openai_api_key,
+        "claude": settings.anthropic_api_key,
+    }.get(provider, "")
+
+    if not request.api_key and not server_key:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No {provider} API key available. This deployment has no server "
+                f"key configured — enter your own key to run an analysis."
+            ),
+        )
+    if not request.api_key:
+        return None
+    return {
+        "api_key": request.api_key,
+        "provider": request.llm_provider,
+        "model": request.llm_model,
+    }
+
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     """System health check endpoint."""
@@ -205,6 +246,7 @@ async def run_analysis(request: AnalysisRequest):
             initialize_phase4_systems,
         )
 
+        llm_override = _llm_override_from(request)
         start = time.time()
 
         # Initialize systems (cached after first call)
@@ -230,6 +272,7 @@ async def run_analysis(request: AnalysisRequest):
             risk_profile=request.risk_profile,
             collector=collector,
             tracer=tracer,
+            llm_override=llm_override,
         )
         elapsed = time.time() - start
 
@@ -280,6 +323,8 @@ async def run_analysis(request: AnalysisRequest):
 
         return response
 
+    except HTTPException:
+        raise  # a deliberate 4xx (e.g. missing API key) — don't mask as 500
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -302,8 +347,11 @@ async def run_evaluation(request: AnalysisRequest):
             _phase2_components = initialize_phase2_systems()
 
         # Run agent
+        llm_override = _llm_override_from(request)
         start = time.time()
-        final_state = run_agent(request.query, _phase2_components)
+        final_state = run_agent(
+            request.query, _phase2_components, llm_override=llm_override
+        )
         elapsed = time.time() - start
 
         # Run evaluation
@@ -323,6 +371,8 @@ async def run_evaluation(request: AnalysisRequest):
             metrics=[m.to_dict() for m in eval_report.metrics],
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Evaluation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -397,4 +447,20 @@ async def get_config():
         "max_iterations": settings.max_iterations,
         "vector_backend": settings.vector_backend,
         "log_level": settings.log_level,
+        # True when the deployment ships its own key — the UI can then make the
+        # key field optional instead of required.
+        "server_key_configured": bool(
+            {"groq": settings.groq_api_key, "openai": settings.openai_api_key,
+             "claude": settings.anthropic_api_key}.get(settings.llm_provider, "")
+        ),
     }
+
+
+# ===================================================================
+# Static frontend — served same-origin so the browser calls /analyze,
+# /reports, /health directly (no gateway, no CORS). Mounted last so it
+# never shadows an API route.
+# ===================================================================
+_STATIC_DIR = _PROJECT_ROOT / "webui" / "static"
+if _STATIC_DIR.is_dir():
+    app.mount("/", StaticFiles(directory=str(_STATIC_DIR), html=True), name="static")

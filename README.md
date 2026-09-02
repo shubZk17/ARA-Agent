@@ -3,9 +3,8 @@ title: ARA-1 Autonomous Research Agent
 emoji: 🤖
 colorFrom: indigo
 colorTo: purple
-sdk: streamlit
-sdk_version: 1.40.0
-app_file: app.py
+sdk: docker
+app_port: 7860
 pinned: false
 license: mit
 ---

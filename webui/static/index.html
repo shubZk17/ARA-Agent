@@ -26,6 +26,23 @@
 
         <div class="row">
           <div class="field">
+            <label for="provider">Model provider</label>
+            <select id="provider" name="provider">
+              <option value="groq" selected>Groq</option>
+              <option value="openai">OpenAI</option>
+              <option value="claude">Anthropic</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="api_key">API key</label>
+            <input id="api_key" name="api_key" type="password" autocomplete="off"
+                   placeholder="Your provider API key" />
+          </div>
+        </div>
+        <p class="hint" id="key-hint">Your key is sent with this one request to call the model and is never stored or logged. <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Get a free Groq key ↗</a></p>
+
+        <div class="row">
+          <div class="field">
             <label for="horizon">Horizon</label>
             <select id="horizon" name="horizon">
               <option value="long_term" selected>Long term (1–5y)</option>

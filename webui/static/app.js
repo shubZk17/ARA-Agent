@@ -6,18 +6,35 @@ const $ = (id) => document.getElementById(id);
 async function checkBackendStatus() {
   const el = $("backend-status");
   try {
-    const res = await fetch("/api/health");
+    const res = await fetch("/health");
     const data = await res.json();
-    if (data.backend_up) {
-      el.textContent = "backend online";
+    if (data.status === "healthy") {
+      el.textContent = `backend online · ${data.model || ""}`.trim();
       el.className = "status status--up";
     } else {
       el.textContent = "backend unreachable";
       el.className = "status status--down";
     }
   } catch {
-    el.textContent = "gateway unreachable";
+    el.textContent = "backend unreachable";
     el.className = "status status--down";
+  }
+}
+
+// If the deployment ships its own key, the API-key field is optional.
+async function applyConfig() {
+  try {
+    const res = await fetch("/config");
+    const cfg = await res.json();
+    if (cfg.server_key_configured) {
+      $("api_key").placeholder = "Optional — server key will be used if blank";
+      $("key-hint").textContent =
+        "Optional: leave blank to use the deployment's key, or enter your own.";
+    } else {
+      $("api_key").required = true;
+    }
+  } catch {
+    /* non-fatal — field just stays as-is */
   }
 }
 
@@ -93,7 +110,7 @@ function renderReport(report) {
 async function loadReports() {
   const container = $("reports-list");
   try {
-    const res = await fetch("/api/reports");
+    const res = await fetch("/reports");
     const data = await res.json();
     const reports = data.reports || [];
     if (reports.length === 0) {
@@ -104,7 +121,7 @@ async function loadReports() {
     reports.slice(0, 12).forEach((r) => {
       const a = document.createElement("a");
       a.className = "report-row";
-      a.href = `/api/reports/${encodeURIComponent(r.filename)}`;
+      a.href = `/reports/${encodeURIComponent(r.filename)}`;
       a.target = "_blank";
       a.rel = "noopener";
       a.innerHTML = `<span class="name">${r.filename}</span><span class="open">${r.format.toUpperCase()} ↗</span>`;
@@ -120,9 +137,10 @@ $("analyze-form").addEventListener("submit", async (event) => {
   const query = $("query").value.trim();
   if (!query) return;
 
+  const apiKey = $("api_key").value.trim();
   setRunning(true);
   try {
-    const res = await fetch("/api/analyze", {
+    const res = await fetch("/analyze", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -130,6 +148,8 @@ $("analyze-form").addEventListener("submit", async (event) => {
         horizon: $("horizon").value,
         risk_profile: $("risk_profile").value,
         enable_evaluation: true,
+        api_key: apiKey || null,
+        llm_provider: $("provider").value,
       }),
     });
 
@@ -148,5 +168,6 @@ $("analyze-form").addEventListener("submit", async (event) => {
 });
 
 checkBackendStatus();
+applyConfig();
 loadReports();
 setInterval(checkBackendStatus, 15000);
