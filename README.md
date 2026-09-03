@@ -438,9 +438,14 @@ Scores also decay over time — a stock price from last week is less reliable th
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| **Phase 1** | ✅ Complete | ReAct loop, tool execution, structured parsing, error handling |
-| **Phase 2** | ✅ Complete | Vector memory, semantic retrieval, evidence governance, episodic learning |
-| **Phase 3** | 🔮 Planned | Multi-agent collaboration, async tools, streaming UI, human-in-the-loop |
+| **Phase 1** | ✅ Shipped | ReAct loop, tool registry, 5-strategy JSON parser, session logging |
+| **Phase 2** | ✅ Shipped | Chroma vector store, semantic retrieval, reliability scoring, episodic memory |
+| **Phase 3** | ✅ Shipped | 6-stage deterministic synthesis DAG → BUY/HOLD/SELL thesis + Markdown/PDF reports |
+| **Phase 4** | ✅ Shipped | 22-metric evaluation, observability (telemetry + tracing), FastAPI backend, Streamlit UI |
+| **Phase 5** | ✅ Shipped | Data-integrity + honest-confidence pass: D1–D12 closed, structured tool payloads (canonical units), abstain gate below 8 metrics |
+| **Phase 6** | ✅ Shipped | Short/medium/long horizons that re-weight synthesis, 2-year price series, technical engine, market-context tool, dated + falsifiable recommendations with an invalidation condition, append-only recommendation log |
+| **Phase 7** | 🔨 Partial | Real multi-source evidence: SEC EDGAR `companyfacts` tool, PDF ingestion (10-K/10-Q, no OCR), earnings-transcript ingestion, insider-transactions tool (3rd source family). The conflict-driven reroute into the financial engine (7.4) is not built |
+| **Phase 8** | 🔨 Mechanism shipped, not yet exercised | Outcome scoring (re-fetches price at review date, grades hit rate + Brier), technical-only rolling backtester, volatility-scaled position sizing, empirical confidence recalibration from graded outcomes. No recommendation has reached its review date yet, so the gate is not closed |
 
 ---
 
