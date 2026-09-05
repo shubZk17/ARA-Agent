@@ -1,496 +1,566 @@
 ---
-title: ARA-1 Autonomous Research Agent
-emoji: 🤖
+app_port: 7860
 colorFrom: indigo
 colorTo: purple
-sdk: docker
-app_port: 7860
-pinned: false
+emoji: 📈
 license: mit
+pinned: false
+sdk: docker
+title: ARA-1 --- Autonomous Research Agent
 ---
 
-<p align="center">
-  <img src="docs/banner.png" alt="ARA-1 Banner" width="100%"/>
-</p>
+# ARA-1 --- Autonomous Research Agent
 
-<h1 align="center">ARA-1 — Autonomous Research Agent</h1>
+An evidence-driven equity research agent that uses an LLM to gather
+financial evidence through tools and a deterministic analysis pipeline
+to turn that evidence into investment theses.
 
+> **Core principle:** the LLM decides **what evidence to gather**.
+> Deterministic analysis decides **what the evidence means**.
 
-<p align="center">
-  <b>A retrieval-aware autonomous financial intelligence system built with LangGraph and the ReAct framework.</b>
-</p>
+## Overview
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.12+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
-  <img src="https://img.shields.io/badge/LangGraph-ReAct-FF6F00?style=for-the-badge&logo=langchain&logoColor=white" alt="LangGraph"/>
-  <img src="https://img.shields.io/badge/ChromaDB-Vector%20Store-4A154B?style=for-the-badge" alt="ChromaDB"/>
-  <img src="https://img.shields.io/badge/LLM-Groq%20%7C%20OpenAI%20%7C%20Claude-10A37F?style=for-the-badge" alt="LLM"/>
-</p>
+ARA-1 performs structured research on publicly traded companies. A
+typical run:
 
----
+1.  Accepts a company ticker or research question.
+2.  Uses a LangGraph ReAct loop to decide which tools to call.
+3.  Collects market, company, financial, news, and SEC data.
+4.  Scores evidence reliability and surfaces conflicts.
+5.  Stores and retrieves useful evidence through ChromaDB and episodic
+    memory.
+6.  Runs a deterministic seven-stage analysis pipeline.
+7.  Produces a horizon-specific investment thesis and report.
+8.  Records recommendations so they can later be evaluated against
+    outcomes.
 
-## 📌 What is ARA-1?
+ARA-1 is intentionally **not a chatbot wrapper**. The LLM is responsible
+for evidence gathering and tool selection; it does not directly generate
+the final BUY/HOLD/SELL decision.
 
-**ARA-1** is an autonomous AI agent that performs end-to-end financial research on publicly traded companies. Give it a ticker symbol or a research question, and it will:
+------------------------------------------------------------------------
 
-- 🔍 **Dynamically select tools** to gather real-time stock data, financial metrics, company profiles, and news
-- 🧠 **Reason step-by-step** using the ReAct (Reasoning + Acting) framework
-- 📚 **Store & retrieve knowledge** from a persistent vector memory (ChromaDB)
-- 📊 **Score source reliability** using a 3-tier evidence governance system
-- ⚡ **Detect conflicting information** and surface it transparently
-- 🗂️ **Learn from past analyses** through episodic memory
+## Architecture
 
-ARA-1 is **not** a chatbot wrapper. It is a fully autonomous agent that decides *what to do*, *when to do it*, and *when to stop* — all without human intervention.
-
----
-
-## 🏗️ Architecture
-
-ARA-1 is built on a **layered modular architecture** with clean separation of concerns:
-
-```
-┌─────────────────────────────────────────────────────────┐
-│              main.py (CLI)  ·  api/ (FastAPI + webui/)  │  ← Entry points
-├─────────────────────────────────────────────────────────┤
-│              LangGraph StateGraph (agent/)              │  ← The ReAct loop
-│         reasoning_node → tool_node → output_node        │
-│         + state · prompts · react_parser                │
-├──────────────────────────┬──────────────────────────────┤
-│      Tool Layer          │      knowledge/              │
-│      (tools/)            │                              │
-│                          │  ingestion/   clean·chunk    │
-│  • stock_price           │  retrieval/   store·search   │
-│  • company_info          │  memory/      episodic       │
-│  • financial_metrics     │  reliability/ tiers·staleness│
-│  • news · price_history  │               ·conflicts     │
-│  • market_context        │                              │
-│  • sec_filings           │                              │
-│  • insider_transactions  │                              │
-├──────────────────────────┴──────────────────────────────┤
-│                       analysis/                         │  ← Evidence → thesis
-│   financial → sentiment → misalignment → risk →         │
-│   confidence → report  ·  indicators                    │
-│   evaluation/ · observability/  (observe, never block)  │
-│   recommendation_store · outcome_scorer · backtester    │
-├─────────────────────────────────────────────────────────┤
-│              config/ (settings · horizons · logging)   │  ← Support
-└─────────────────────────────────────────────────────────┘
-
-Data flows top to bottom. The graph only covers the ReAct loop —
-analysis/ runs after it completes, on the finished state.
-```
-
----
-
-## ⚙️ How It Works — End-to-End Workflow
-
-```mermaid
-flowchart TD
-    A["🧑 User Query"] --> B["Load Episodic Memory<br/>(prior run context)"]
-    B --> C["Build Initial State"]
-    C --> D["LangGraph: reasoning_node"]
-
-    D --> E{"LLM Decision"}
-    E -->|Use a Tool| F["tool_node<br/>Execute Tool"]
-    F --> G["Auto-Ingest Output<br/>→ Clean → Chunk → Embed → Store"]
-    G --> D
-
-    E -->|Final Answer| H["output_node"]
-
-    D --> I["Retrieve Evidence<br/>from Vector Memory"]
-    I --> J["Score Reliability<br/>+ Detect Conflicts"]
-    J --> D
-
-    H --> K["Save Episode<br/>to Episodic Memory"]
-    K --> L["Save Final Analysis<br/>to Vector Memory"]
-    L --> M["🖥️ Display Results"]
-
-    style A fill:#1a1a2e,color:#e94560
-    style D fill:#0f3460,color:#16213e,color:#fff
-    style G fill:#533483,color:#fff
-    style H fill:#0f3460,color:#fff
-    style M fill:#1a1a2e,color:#e94560
+``` text
+                         User Query
+                             |
+                             v
+                    +----------------+
+                    |    main.py     |
+                    |  / api/server  |
+                    +-------+--------+
+                            |
+                            v
+                 +----------------------+
+                 |       agent/         |
+                 |   LangGraph ReAct   |
+                 |                      |
+                 | reasoning -> tool   |
+                 |      ^          |    |
+                 |      |          v    |
+                 |      +------ output  |
+                 +----------+-----------+
+                            |
+              +-------------+-------------+
+              |                           |
+              v                           v
+       +-------------+             +-------------+
+       |   tools/    |             | knowledge/  |
+       |             |             |             |
+       | yfinance    |             | retrieval   |
+       | SEC EDGAR   |             | memory      |
+       | news/data   |             | reliability |
+       +------+------+             +------+------+
+              |                           |
+              +-------------+-------------+
+                            |
+                            v
+                 +----------------------+
+                 |      analysis/       |
+                 |                      |
+                 | financial            |
+                 | technical            |
+                 | sentiment            |
+                 | misalignment         |
+                 | risk                 |
+                 | confidence           |
+                 | thesis               |
+                 +----------+-----------+
+                            |
+                 +----------+----------+
+                 |          |          |
+                 v          v          v
+              Report   Recommendation  Evaluation
+              MD/PDF      JSONL        / scoring
 ```
 
-### Step-by-Step Breakdown
+The graph is only the **ReAct evidence-gathering loop**. Once the graph
+finishes, `analysis/engine.py` receives the completed `AgentState` and
+runs the investment synthesis separately.
 
-| Step | What Happens |
-|------|-------------|
-| **1. Query** | User provides a research question (e.g., *"Analyze NVDA stock"*) |
-| **2. Episodic Recall** | Agent checks if it has analyzed this ticker before and loads prior experience |
-| **3. Reasoning Loop** | LLM uses ReAct framework: **Thought** → **Action** → **Observation** → repeat |
-| **4. Tool Execution** | Agent dynamically selects and calls tools (stock price, metrics, news, etc.) |
-| **5. Auto-Ingestion** | Every tool output is automatically cleaned, chunked, embedded, and stored in ChromaDB |
-| **6. Evidence Retrieval** | At each reasoning step, relevant evidence is semantically retrieved from vector memory |
-| **7. Reliability Scoring** | Retrieved evidence is scored by source tier (Tier 1–3) with staleness decay |
-| **8. Conflict Detection** | Contradictory evidence is flagged (numeric, sentiment, or temporal conflicts) |
-| **9. Final Synthesis** | Agent produces a grounded analysis citing evidence with confidence scores |
-| **10. Memory Update** | Episode saved for future learning; final analysis stored in vector memory |
+### Package boundaries
 
----
+  -----------------------------------------------------------------------
+  Package                             Responsibility
+  ----------------------------------- -----------------------------------
+  `agent/`                            ReAct loop, prompts, state,
+                                      parsing, routing
 
-## 🚀 Local Setup & Usage
+  `tools/`                            External financial data
+                                      acquisition; tools never call the
+                                      LLM
+
+  `knowledge/`                        Ingestion, semantic retrieval,
+                                      episodic memory, reliability and
+                                      conflict handling
+
+  `analysis/`                         Deterministic financial analysis,
+                                      thesis generation, reports,
+                                      evaluation, backtesting and
+                                      recommendation scoring
+
+  `api/`                              FastAPI backend and API endpoints
+
+  `webui/`                            Lightweight HTML/CSS/JavaScript
+                                      frontend served by FastAPI
+
+  `config/`                           Settings, investment horizons and
+                                      logging
+
+  `tests/`                            Offline test suite
+  -----------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## How a Run Works
+
+``` text
+User Query
+    |
+    v
+Initial AgentState
+    |
+    v
++-----------------------------+
+| LangGraph ReAct Loop        |
+|                             |
+| Reason -> Tool -> Observe   |
+|          ^          |       |
+|          +----------+       |
++-------------+---------------+
+              |
+              | evidence satisfied
+              v
+       Completed AgentState
+              |
+              v
++-----------------------------+
+| Deterministic Synthesis     |
+|                             |
+| Financial                   |
+|     ↓                       |
+| Technical                   |
+|     ↓                       |
+| Sentiment                   |
+|     ↓                       |
+| Misalignment                |
+|     ↓                       |
+| Risk                        |
+|     ↓                       |
+| Confidence                 |
+|     ↓                       |
+| Investment Thesis           |
++-------------+---------------+
+              |
+       +------+------+
+       |             |
+       v             v
+   MD / PDF      JSONL record
+```
+
+### 1. Evidence gathering
+
+The LLM receives the research question, previous context, available
+tools, and retrieved evidence. It decides which tool is useful next.
+
+The current tool layer includes:
+
+-   Stock price
+-   Financial metrics
+-   Company information
+-   News
+-   Price history
+-   Market context
+-   SEC filings
+-   SEC insider activity
+
+### 2. Evidence governance
+
+Tool outputs are treated as **evidence candidates, not unquestionable
+truth**.
+
+The knowledge layer:
+
+-   Cleans and chunks tool output.
+-   Generates embeddings.
+-   Stores evidence in ChromaDB.
+-   Retrieves semantically relevant evidence.
+-   Combines similarity with reliability.
+-   Accounts for source staleness.
+-   Detects conflicting evidence.
+
+The agent also records evidence confidence and conflict reports in its
+state.
+
+### 3. Deterministic synthesis
+
+After the ReAct loop completes, the finished state passes through:
+
+``` text
+Financial Analysis
+       ↓
+Technical Analysis
+       ↓
+Sentiment Analysis
+       ↓
+Misalignment Detection
+       ↓
+Risk Analysis
+       ↓
+Confidence Calibration
+       ↓
+Investment Thesis
+```
+
+The synthesis layer does not make another LLM call. It converts
+structured evidence into an `InvestmentOutlook` and horizon-specific
+`HorizonRecommendation`.
+
+Recommendations carry explicit conditions such as:
+
+-   investment horizon
+-   holding period
+-   entry condition
+-   review date
+-   price at recommendation
+-   confidence
+-   invalidation condition
+
+The invalidation condition makes the thesis **falsifiable** rather than
+simply descriptive.
+
+------------------------------------------------------------------------
+
+## Investment Horizons
+
+ARA-1 supports horizon-specific reasoning through `config/horizons.py`.
+
+A horizon profile controls:
+
+-   evidence weighting
+-   analysis thresholds
+-   required tools
+-   review period
+-   prompt guidance
+
+The same company can therefore receive different short-, medium-, and
+long-term assessments because the decision criteria change with the
+investment horizon.
+
+------------------------------------------------------------------------
+
+## Data Sources
+
+The tool layer currently uses:
+
+-   **yfinance** for market and company data
+-   **SEC EDGAR / companyfacts** for filed financial information
+-   News data available through the financial data layer
+
+The architecture is designed so additional data sources can be added as
+independent tools without changing the core ReAct loop.
+
+------------------------------------------------------------------------
+
+## Project Structure
+
+``` text
+ARA-Agent/
+│
+├── agent/                 # ReAct agent and LangGraph control flow
+├── tools/                 # External financial data tools
+├── knowledge/             # Retrieval, memory and evidence governance
+├── analysis/              # Deterministic investment analysis
+├── api/                   # FastAPI backend
+├── webui/                 # Static frontend
+├── config/                # Settings, horizons and logging
+├── tests/                 # Offline test suite
+│
+├── main.py                # CLI entry point and application wiring
+├── requirements.txt       # Python dependencies
+├── pyproject.toml         # Project configuration
+├── Dockerfile             # Container deployment
+└── .env.example           # Environment configuration template
+```
+
+Runtime data such as the vector database, episodic memory,
+recommendations, evaluations and logs are kept outside the core source
+structure.
+
+------------------------------------------------------------------------
+
+## Getting Started
 
 ### Prerequisites
 
-- **Python 3.12+**
-- **Git**
-- At least one LLM API key: **Groq** (free), **OpenAI**, or **Anthropic**
+-   Python 3.12+
+-   Git
+-   An LLM API key supported by the current configuration
 
-### 1. Clone the Repository
+### Installation
 
-```bash
-git clone https://github.com/your-username/ara-agent.git
-cd ara-agent
+``` bash
+git clone https://github.com/shubZk17/ARA-Agent.git
+cd ARA-Agent
+
+python -m venv .venv
 ```
 
-### 2. Create a Virtual Environment
+Windows:
 
-```bash
-# Windows
-python -m venv .venv
+``` bash
 .venv\Scripts\activate
+```
 
-# macOS / Linux
-python3 -m venv .venv
+macOS / Linux:
+
+``` bash
 source .venv/bin/activate
 ```
 
-### 3. Install Dependencies
+Install dependencies:
 
-```bash
+``` bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
+### Environment
 
-Copy the example config and add your API keys:
+Copy the example environment file:
 
-```bash
+``` bash
 cp .env.example .env
 ```
 
-Edit `.env` with your preferred editor:
+Then configure the required LLM credentials and application settings in
+`.env`.
 
-```env
-# ============================================================
-# ARA-1 Environment Configuration
-# ============================================================
+### Run from the CLI
 
-# --- LLM Provider (pick one) ---
-# Option A: Groq (FREE — recommended for getting started)
-GROQ_API_KEY=your-groq-api-key-here
-LLM_PROVIDER=groq
-GROQ_MODEL=llama-3.3-70b-versatile
+Interactive mode:
 
-# Option B: OpenAI
-# OPENAI_API_KEY=your-openai-api-key-here
-# LLM_PROVIDER=openai
-# OPENAI_MODEL=gpt-4o
-
-# Option C: Anthropic
-# ANTHROPIC_API_KEY=your-anthropic-api-key-here
-# LLM_PROVIDER=claude
-# ANTHROPIC_MODEL=claude-sonnet-4-20250514
-
-# --- Agent Settings ---
-MAX_ITERATIONS=10
-LOG_LEVEL=INFO
-
-# --- Phase 2: Embeddings (optional, enhances retrieval quality) ---
-# OPENAI_API_KEY=your-openai-api-key-here
-```
-
-> **💡 Tip:** Get a free Groq API key at [console.groq.com](https://console.groq.com). No credit card required.
-
-### 5. Run the Agent
-
-**Interactive mode** (prompts for a query):
-
-```bash
+``` bash
 python main.py
 ```
 
-**With a query argument:**
+With a research question:
 
-```bash
-python main.py "Analyze Tesla stock as a long-term investment"
+``` bash
+python main.py "Analyze NVDA as a long-term investment"
 ```
 
-**More example queries:**
+Other examples:
 
-```bash
+``` bash
 python main.py "What are the financial risks of investing in AAPL?"
-python main.py "Compare NVDA and AMD financial performance"
-python main.py "Provide a comprehensive analysis of Microsoft (MSFT)"
+python main.py "Compare the financial performance of NVDA and AMD"
 ```
 
----
+------------------------------------------------------------------------
 
-## 📂 Project Structure
+## Web API
 
-```
-ARA-1/
-│
-├── main.py                   # 🚀 CLI entry point & system assembly
-│
-├── agent/                    # 🧠 The reasoning loop
-│   ├── state.py              #    AgentState — the single source of truth
-│   ├── graph.py              #    LangGraph wiring: 3 nodes, 1 loop
-│   ├── nodes.py              #    reasoning → tool → output
-│   ├── prompts.py            #    System prompt template + builders
-│   └── react_parser.py       #    LLM text → structured action (5 fallbacks)
-│
-├── tools/                    # 🔧 Where all external data enters
-│   ├── base.py               #    BaseTool — subclass this to add one
-│   ├── registry.py           #    Register in main.py, that's the whole step
-│   ├── stock_price.py        #    Price, day range, 52w range, volume
-│   ├── company_info.py       #    Sector, industry, HQ, headcount
-│   ├── financial_metrics.py  #    P/E, margins, ROE, growth, leverage
-│   ├── news.py               #    Recent headlines
-│   ├── price_history.py      #    2-year daily series + SMA
-│   ├── market_context.py     #    Index levels, beta cross-check
-│   ├── sec_filings.py        #    SEC EDGAR companyfacts (XBRL)
-│   └── sec_insider.py        #    SEC Form 4 insider filing activity
-│
-├── knowledge/                # 📚 What the agent knows and how it recalls it
-│   ├── ingestion/            #    Text in:  clean → chunk → embed → store
-│   ├── retrieval/            #    Text out: vector store + semantic search
-│   ├── memory/               #    What survives across runs (episodic.py)
-│   └── reliability/          #    Source tiers, staleness, conflict detection
-│
-├── analysis/                 # 📊 Turning evidence into a thesis (+ grading it)
-│   ├── engine.py             #    Orchestrates the synthesis stages below
-│   ├── financial_engine.py   #    Score ~22 metrics against thresholds
-│   ├── technical_engine.py   #    Price-series signals per horizon
-│   ├── indicators.py         #    Pure pandas: SMA/EMA/RSI/MACD/ATR/…
-│   ├── sentiment_analyzer.py #    Lexicon-based news sentiment
-│   ├── misalignment_detector.py #  Does the story match the numbers?
-│   ├── risk_analyzer.py      #    Valuation, leverage, volatility risks
-│   ├── confidence_calibrator.py #  How much should we trust this?
-│   ├── report_generator.py   #    Render Markdown + PDF
-│   ├── schemas.py            #    Pydantic models tying it together
-│   ├── recommendation_store.py  # Append-only JSONL log of every call
-│   ├── outcome_scorer.py     #    Grade matured recommendations (hit rate, Brier)
-│   ├── backtester.py         #    Technical-only rolling backtest
-│   ├── score.py              #    CLI: python -m analysis.score
-│   ├── evaluation/           #    22 run-quality metrics + hallucination check
-│   └── observability/        #    Optional telemetry: collector + tracer
-│
-├── api/server.py             # 🌐 FastAPI — POST /analyze, /evaluate, serves webui/
-├── webui/static/             # 🖥️  Plain HTML/CSS/JS, served same-origin by FastAPI
-├── config/                   # ⚙️  settings (reads .env) · horizons · logging
-│
-├── data/                     # 💾 Runtime state (gitignored)
-│   ├── chroma/               #    Vector database
-│   ├── episodic/             #    One JSON per past run
-│   ├── evaluations/          #    Evaluation output
-│   └── recommendations/      #    Phase 8 ground-truth log (JSONL per month)
-├── reports/                  # 📄 Generated analysis reports
-├── logs/                     # 📄 Per-session logs
-│
-├── tests/                    # ✅ ~180 offline tests (no network, no LLM)
-├── CLAUDE.md                 # 🧭 Architecture notes + known defects
-├── requirements.txt
-├── Dockerfile
-└── .env.example
+FastAPI is the only backend. The same application also serves the static
+web UI, so there is no separate web gateway.
+
+The primary API surface includes:
+
+``` text
+GET  /
+GET  /health
+GET  /config
+POST /analyze
+POST /evaluate
 ```
 
-### Where to start reading
+The application can be run with the project's configured ASGI server or
+through Docker.
 
-Follow the data, in this order:
+------------------------------------------------------------------------
 
-1. **`main.py`** — the assembly point. Everything is wired here and nowhere else.
-2. **`agent/state.py`** — `AgentState` is what flows between every node. Read this before any node.
-3. **`agent/graph.py`** — 3 nodes and one loop. Small file, whole control flow.
-4. **`agent/nodes.py`** — where reasoning and tool execution actually happen.
-5. **`tools/stock_price.py`** — the simplest tool; the shape all others follow.
-6. **`analysis/engine.py`** — the synthesis pipeline that turns the finished state into a thesis.
+## Adding a Tool
 
-> **One thing that surprises everyone:** synthesis is **not** part of the graph. The graph is only the ReAct loop. `main.py` runs it to completion, then hands the finished state to `analysis/engine.py` as a separate step.
+Tools are intentionally isolated from the agent's reasoning code.
 
----
+To add a new financial data source:
 
-## 🧪 Example Output
+1.  Create a module in `tools/`.
+2.  Implement the `BaseTool` contract.
+3.  Define its name, description and parameters.
+4.  Implement data fetching and rendering.
+5.  Register the tool in the tool registry.
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│  ARA-1 - Autonomous Research Agent                          │
-│  Phase 2: Retrieval-Aware Financial Intelligence            │
-└─────────────────────────────────────────────────────────────┘
-[OK] Configuration valid
-[OK] LLM Provider: groq (llama-3.3-70b-versatile)
-[OK] Phase 2 systems initialized:
-     Vector Store: chroma (4 existing docs)
-     Embeddings: text-embedding-3-small
-     Episodic Memory: 1 prior episodes
+Conceptually:
 
-Starting analysis...
-Query: Analyze NVDA stock performance
-Max iterations: 10
-
-  === Iteration 1/10 ===
-  Thought: I need to gather NVDA's current stock price...
-  >> Action: get_stock_price({'ticker': 'NVDA'})
-  Ingested 1 chunk (total in store: 5)
-
-  === Iteration 2/10 ===
-  Retrieved 5 evidence items in 6.3ms
-  Thought: Now I need financial metrics...
-  >> Action: get_financial_metrics({'ticker': 'NVDA'})
-  Ingested 1 chunk (total in store: 6)
-
-  ...
-
-┌──────────────────── [OK] Analysis Complete ─────────────────────┐
-│                                                                  │
-│  NVIDIA Corporation (NVDA) is a technology company operating     │
-│  in the semiconductors industry. Current price: USD 224.65,     │
-│  trailing P/E: 45.83, revenue growth: 73.20%, market cap:       │
-│  $5.46T. Strong financial position with 55.60% profit margin.   │
-│                                                                  │
-└──────────────────────────────────────────────────────────────────┘
-
-Tool Usage Summary:
-┌───┬───────────────────────┬────────────────────┬────────┐
-│ # │ Tool                  │ Input              │ Status │
-├───┼───────────────────────┼────────────────────┼────────┤
-│ 1 │ get_stock_price       │ {'ticker': 'NVDA'} │ OK     │
-│ 2 │ get_financial_metrics │ {'ticker': 'NVDA'} │ OK     │
-│ 3 │ get_company_info      │ {'ticker': 'NVDA'} │ OK     │
-└───┴───────────────────────┴────────────────────┴────────┘
-
-Memory Operations:
-  📦 ingested:get_stock_price:NVDA:1chunks
-  📦 ingested:get_financial_metrics:NVDA:1chunks
-  📦 ingested:get_company_info:NVDA:1chunks
+``` text
+tools/
+└── new_data_source.py
+        |
+        v
+    BaseTool
+        |
+        v
+  ToolRegistry
+        |
+        v
+   ReAct agent
 ```
 
----
+A tool should fetch and format evidence. It should **not** decide what
+that evidence means and should **never call the LLM**.
 
-## 🔌 Adding Custom Tools
+------------------------------------------------------------------------
 
-ARA-1's tool system is fully extensible. To add a new tool:
+## Evaluation and Outcome Tracking
 
-**1. Create a new file** in `tools/`:
+ARA-1 distinguishes between **process evaluation** and **investment
+outcome evaluation**.
 
-```python
-# tools/my_custom_tool.py
-from tools.base import BaseTool, ToolResult
+### Process evaluation
 
-class MyCustomTool(BaseTool):
-    @property
-    def name(self) -> str:
-        return "my_custom_tool"
+`analysis/evaluation/` contains run-quality metrics and checks such as
+tool usage, execution behaviour and hallucination-related signals.
 
-    @property
-    def description(self) -> str:
-        return "Description of what this tool does"
+### Outcome evaluation
 
-    @property
-    def parameters(self) -> dict:
-        return {
-            "param1": {"type": "string", "description": "What this param is", "required": True}
-        }
+Recommendations are stored in an append-only JSONL record. Once a
+recommendation reaches its review date, `analysis/outcome_scorer.py` can
+evaluate the realized outcome.
 
-    def execute(self, **kwargs) -> ToolResult:
-        param1 = kwargs.get("param1", "")
-        # Your logic here
-        result = f"Result for {param1}"
-        return ToolResult(success=True, data=result)
+Additional analysis includes:
+
+-   recommendation hit rate
+-   Brier-style scoring
+-   technical backtesting
+-   empirical confidence calibration
+
+This creates a path from:
+
+``` text
+Recommendation
+      ↓
+Realized Outcome
+      ↓
+Outcome Score
+      ↓
+Calibration
 ```
 
-**2. Register it** in `main.py`:
+------------------------------------------------------------------------
 
-```python
-from tools.my_custom_tool import MyCustomTool
+## Testing
 
-def create_tool_registry() -> ToolRegistry:
-    registry = ToolRegistry()
-    # ... existing tools ...
-    registry.register(MyCustomTool())  # ← Add this line
-    return registry
+The test suite is designed to run primarily without network access or
+live LLM calls.
+
+Run:
+
+``` bash
+pytest
 ```
 
-That's it. The agent will automatically discover and use your tool when relevant.
+The project also uses compile-time checks and targeted tests for state
+contracts, graph routing, horizons, tools, analysis and observability.
 
----
+------------------------------------------------------------------------
 
-## 🔑 Supported LLM Providers
+## Design Principles
 
-| Provider | Model | Free? | Configuration |
-|----------|-------|-------|---------------|
-| **Groq** | `llama-3.3-70b-versatile` | ✅ Yes | `LLM_PROVIDER=groq` |
-| **OpenAI** | `gpt-4o` | ❌ Paid | `LLM_PROVIDER=openai` |
-| **Anthropic** | `claude-sonnet-4-20250514` | ❌ Paid | `LLM_PROVIDER=claude` |
+### Evidence is not truth
 
-> **Recommendation:** Start with **Groq** — it's free, fast, and the `llama-3.3-70b-versatile` model works excellently with ARA-1's ReAct prompts.
+Every external result is treated as evidence with reliability and
+freshness characteristics.
 
----
+### The LLM gathers; deterministic code synthesizes
 
-## 🛡️ Source Reliability Tiers
+The LLM handles tool selection and evidence gathering. The investment
+thesis is produced by deterministic analysis code.
 
-ARA-1 doesn't treat all information equally. Every piece of evidence is scored:
+### Structured data is preferred
 
-| Tier | Score Range | Sources | Examples |
-|------|------------|---------|----------|
-| **Tier 1** | 0.85 – 1.0 | Official/Primary | SEC filings, exchange data, tool API outputs |
-| **Tier 2** | 0.60 – 0.84 | Established Media | Reuters, Bloomberg, Yahoo Finance, WSJ |
-| **Tier 3** | 0.30 – 0.59 | Secondary/Informal | Seeking Alpha, Reddit, blogs, social media |
+Tools maintain canonical structured payloads for downstream analysis.
+Human-readable strings are derived from those payloads rather than
+parsed back into numbers.
 
-Scores also decay over time — a stock price from last week is less reliable than one from today.
+### Recommendations should be falsifiable
 
----
+A recommendation includes an explicit invalidation condition and review
+date.
 
-## 📊 Phase Progression
+### Keep the agent bounded
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| **Phase 1** | ✅ Shipped | ReAct loop, tool registry, 5-strategy JSON parser, session logging |
-| **Phase 2** | ✅ Shipped | Chroma vector store, semantic retrieval, reliability scoring, episodic memory |
-| **Phase 3** | ✅ Shipped | 6-stage deterministic synthesis DAG → BUY/HOLD/SELL thesis + Markdown/PDF reports |
-| **Phase 4** | ✅ Shipped | 22-metric evaluation, observability (telemetry + tracing), FastAPI backend + static web UI |
-| **Phase 5** | ✅ Shipped | Data-integrity + honest-confidence pass: D1–D12 closed, structured tool payloads (canonical units), abstain gate below 8 metrics |
-| **Phase 6** | ✅ Shipped | Short/medium/long horizons that re-weight synthesis, 2-year price series, technical engine, market-context tool, dated + falsifiable recommendations with an invalidation condition, append-only recommendation log |
-| **Phase 7** | 🔨 Partial | Real multi-source evidence: SEC EDGAR `companyfacts` tool, PDF ingestion (10-K/10-Q, no OCR), earnings-transcript ingestion, insider-transactions tool (3rd source family). The conflict-driven reroute into the financial engine (7.4) is not built |
-| **Phase 8** | 🔨 Mechanism shipped, not yet exercised | Outcome scoring (re-fetches price at review date, grades hit rate + Brier), technical-only rolling backtester, volatility-scaled position sizing, empirical confidence recalibration from graded outcomes. No recommendation has reached its review date yet, so the gate is not closed |
+The ReAct loop has bounded iterations and bounded parsing retries. The
+agent should gather enough evidence, not run indefinitely.
 
----
+### Keep components replaceable
 
-## 🧰 Tech Stack
+Tools, horizons and analysis dimensions can be extended without
+rewriting the core graph.
 
-| Component | Technology |
-|-----------|-----------|
-| **Agent Framework** | LangGraph (StateGraph) |
-| **Reasoning** | ReAct (Reason + Act) |
-| **LLM Interface** | LangChain Core |
-| **Vector Database** | ChromaDB |
-| **Embeddings** | OpenAI text-embedding-3-small |
-| **Financial Data** | yfinance |
-| **Data Validation** | Pydantic v2 |
-| **CLI / Display** | Rich |
-| **Logging** | Python logging + Rich |
-| **Config** | python-dotenv |
+------------------------------------------------------------------------
 
----
+## Development Guide
 
-## 🤝 Contributing
+If you are learning the codebase, read it in this order:
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/new-tool`)
-3. Commit your changes (`git commit -m 'Add SEC filing tool'`)
-4. Push to the branch (`git push origin feature/new-tool`)
-5. Open a Pull Request
+1.  `main.py` --- application wiring
+2.  `agent/state.py` --- the `AgentState` contract
+3.  `agent/graph.py` --- the ReAct control flow
+4.  `agent/nodes.py` --- reasoning and tool execution
+5.  `tools/stock_price.py` --- simplest example of a tool
+6.  `knowledge/` --- retrieval and evidence handling
+7.  `analysis/engine.py` --- deterministic synthesis pipeline
 
----
+The most important distinction to remember is:
 
-## 📜 License
+``` text
+                 LLM
+                  |
+           "What should I
+            investigate?"
+                  |
+                  v
+          Evidence / Tools
+                  |
+                  v
+          Completed State
+                  |
+                  v
+        Deterministic Analysis
+                  |
+          "What does the
+           evidence imply?"
+                  |
+                  v
+          Investment Thesis
+```
 
-This project is for educational and research purposes. 
+------------------------------------------------------------------------
 
----
+## License
 
-<p align="center">
-  <b>Built with ❤️ by Shubham</b><br/>
-  <i>ARA Agent-- Any feedback is appreciated.</i>
-</p>
+MIT License.
+
+This project is intended for educational and research purposes. It is
+not financial advice.
