@@ -75,7 +75,7 @@ from tools.registry import ToolRegistry
 from tools.sec_filings import SecFilingsTool
 from tools.sec_insider import SecInsiderTool
 from tools.stock_price import StockPriceTool
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 console = Console(force_terminal=True)
@@ -455,8 +455,8 @@ def initialize_phase4_systems() -> dict:
     # just quietly stopped existing. Independent failures must stay independent.
 
     try:
-        from quality.observability.collector import TelemetryCollector
-        from quality.observability.tracer import ExecutionTracer
+        from analysis.observability.collector import TelemetryCollector
+        from analysis.observability.tracer import ExecutionTracer
 
         collector = TelemetryCollector()
         components["collector"] = collector
@@ -466,7 +466,7 @@ def initialize_phase4_systems() -> dict:
 
     try:
         if settings.enable_evaluation:
-            from quality.evaluation.evaluator import SystemEvaluator
+            from analysis.evaluation.evaluator import SystemEvaluator
             components["evaluator"] = SystemEvaluator()
     except Exception as e:
         logger.warning(f"Evaluation unavailable (non-fatal): {e}")
@@ -547,7 +547,7 @@ def run_phase4_evaluation(
 
 def _display_evaluation_results(eval_report) -> None:
     """Display Phase 4 evaluation results to the console."""
-    from quality.evaluation.metrics import MetricStatus
+    from analysis.evaluation.metrics import MetricStatus
 
     # Overall score panel
     score = eval_report.overall_score
@@ -972,7 +972,7 @@ def _run_phase3_with_capture(
         # rather than in main() — the CLI, Streamlit and the API all route
         # through this function, so one call covers every entry point and no
         # future caller can forget it. Never raises (see record_recommendation).
-        from validation import record_recommendation
+        from analysis.recommendation_store import record_recommendation
         record_recommendation(report)
 
         # Generate reports

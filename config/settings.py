@@ -15,7 +15,7 @@ WHY THIS EXISTS:
 HOW IT CONNECTS:
     - agent/ imports Settings to know which LLM to use and iteration limits.
     - tools/ imports Settings for API keys if needed.
-    - utils/logger.py imports Settings for log level.
+    - config/logging.py imports Settings for log level.
     - main.py imports Settings to validate config at startup.
 
 SCALABILITY:

@@ -39,7 +39,7 @@ from typing import Any
 import pandas as pd
 import yfinance as yf
 
-from analytics.indicators import (
+from analysis.indicators import (
     atr,
     macd,
     max_drawdown,

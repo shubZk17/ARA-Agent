@@ -31,7 +31,7 @@ import requests
 
 from tools.base import BaseTool, ToolParameter
 from tools.sec_filings import _headers, _load_ticker_cik_map
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

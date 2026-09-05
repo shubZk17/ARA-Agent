@@ -49,7 +49,7 @@ from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

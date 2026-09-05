@@ -1,5 +1,5 @@
 """
-utils/logger.py — Structured Logging Infrastructure
+config/logging.py — Structured Logging Infrastructure
 =====================================================
 
 WHY THIS EXISTS:
@@ -63,7 +63,7 @@ def get_logger(name: str) -> logging.Logger:
     Get a namespaced logger with console + file handlers.
 
     Usage:
-        from utils.logger import get_logger
+        from config.logging import get_logger
         logger = get_logger(__name__)
         logger.info("Agent started", extra={"query": user_query})
 

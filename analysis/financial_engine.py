@@ -49,7 +49,7 @@ from analysis.schemas import (
     MetricInsight,
 )
 from config.horizons import HorizonProfile
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

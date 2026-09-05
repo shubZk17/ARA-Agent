@@ -1,5 +1,5 @@
 """
-validation/backtester.py — Phase 8.2: technical-only rolling backtest
+analysis/backtester.py — Phase 8.2: technical-only rolling backtest
 ==========================================================================
 
 WHY TECHNICAL-ONLY, NOT FUNDAMENTALS:
@@ -37,8 +37,8 @@ from typing import Optional
 import pandas as pd
 import yfinance as yf
 
-from analytics.indicators import sma
-from utils.logger import get_logger
+from analysis.indicators import sma
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -138,7 +138,7 @@ def demo() -> None:
     except ValueError:
         pass
 
-    print("validation.backtester self-check OK")
+    print("analysis.backtester self-check OK")
 
 
 def main() -> None:

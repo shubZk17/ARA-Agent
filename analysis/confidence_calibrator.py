@@ -39,7 +39,7 @@ from analysis.schemas import (
     RiskSeverity,
     SentimentProfile,
 )
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -98,8 +98,8 @@ def _empirical_reliability_baseline(default: float) -> float:
     `default`, exactly as if Phase 8 had not shipped.
     """
     try:
-        from validation.outcome_scorer import summarize
-        from validation.recommendation_store import RecommendationStore
+        from analysis.outcome_scorer import summarize
+        from analysis.recommendation_store import RecommendationStore
 
         summary = summarize(RecommendationStore().load_all())
         if summary.get("graded_count", 0) < MIN_GRADED_SAMPLE:

@@ -1,9 +1,9 @@
 """
-validation/outcome_scorer.py — Phase 8.1: grade matured recommendations
+analysis/outcome_scorer.py — Phase 8.1: grade matured recommendations
 ==========================================================================
 
 WHY THIS EXISTS:
-    Every one of the 22 evaluation metrics in quality/evaluation/metrics.py
+    Every one of the 22 evaluation metrics in analysis/evaluation/metrics.py
     measures PROCESS (tool efficiency, parse-error rate). None of them can
     tell a right recommendation from a wrong one. This module is the first
     thing in the project that can: it re-fetches price history for a
@@ -14,7 +14,7 @@ WHY THIS EXISTS:
 WHY A SEPARATE CLI, NOT PART OF A RUN:
     A recommendation cannot be graded until its review window has elapsed —
     weeks or months after it was made. This has to run on its own schedule,
-    detached from any single analysis. `python -m validation.score`.
+    detached from any single analysis. `python -m analysis.score`.
 
 GRADING RULE:
     BUY/STRONG_BUY is "correct" if the realized return over the window is
@@ -34,8 +34,8 @@ from typing import Any, Optional
 import pandas as pd
 import yfinance as yf
 
-from utils.logger import get_logger
-from validation.recommendation_store import RecommendationStore
+from config.logging import get_logger
+from analysis.recommendation_store import RecommendationStore
 
 logger = get_logger(__name__)
 

@@ -54,7 +54,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

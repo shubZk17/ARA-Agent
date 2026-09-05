@@ -50,7 +50,7 @@ ARA-1 is built on a **layered modular architecture** with clean separation of co
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│              main.py  ·  app.py  ·  api/                │  ← Entry points
+│              main.py (CLI)  ·  api/ (FastAPI + webui/)  │  ← Entry points
 ├─────────────────────────────────────────────────────────┤
 │              LangGraph StateGraph (agent/)              │  ← The ReAct loop
 │         reasoning_node → tool_node → output_node        │
@@ -62,16 +62,18 @@ ARA-1 is built on a **layered modular architecture** with clean separation of co
 │  • stock_price           │  retrieval/   store·search   │
 │  • company_info          │  memory/      episodic       │
 │  • financial_metrics     │  reliability/ tiers·staleness│
-│  • news                  │               ·conflicts     │
+│  • news · price_history  │               ·conflicts     │
+│  • market_context        │                              │
+│  • sec_filings           │                              │
+│  • insider_transactions  │                              │
 ├──────────────────────────┴──────────────────────────────┤
 │                       analysis/                         │  ← Evidence → thesis
 │   financial → sentiment → misalignment → risk →         │
-│   confidence → report                                   │
+│   confidence → report  ·  indicators                    │
+│   evaluation/ · observability/  (observe, never block)  │
+│   recommendation_store · outcome_scorer · backtester    │
 ├─────────────────────────────────────────────────────────┤
-│                       quality/                          │  ← Observes only,
-│   evaluation/ · observability/ · dashboard              │    never blocks a run
-├─────────────────────────────────────────────────────────┤
-│              config/  ·  utils/logger                   │  ← Support
+│              config/ (settings · horizons · logging)   │  ← Support
 └─────────────────────────────────────────────────────────┘
 
 Data flows top to bottom. The graph only covers the ReAct loop —
@@ -231,16 +233,13 @@ python main.py "Provide a comprehensive analysis of Microsoft (MSFT)"
 ARA-1/
 │
 ├── main.py                   # 🚀 CLI entry point & system assembly
-├── app.py                    # 🖥️  Streamlit UI (the Hugging Face Space)
 │
 ├── agent/                    # 🧠 The reasoning loop
 │   ├── state.py              #    AgentState — the single source of truth
 │   ├── graph.py              #    LangGraph wiring: 3 nodes, 1 loop
 │   ├── nodes.py              #    reasoning → tool → output
 │   ├── prompts.py            #    System prompt template + builders
-│   ├── react_parser.py       #    LLM text → structured action (5 fallbacks)
-│   ├── retry_handler.py      #    ⚠️ built, not wired
-│   └── checkpoint_manager.py #    ⚠️ built, not wired
+│   └── react_parser.py       #    LLM text → structured action (5 fallbacks)
 │
 ├── tools/                    # 🔧 Where all external data enters
 │   ├── base.py               #    BaseTool — subclass this to add one
@@ -248,7 +247,11 @@ ARA-1/
 │   ├── stock_price.py        #    Price, day range, 52w range, volume
 │   ├── company_info.py       #    Sector, industry, HQ, headcount
 │   ├── financial_metrics.py  #    P/E, margins, ROE, growth, leverage
-│   └── news.py               #    Recent headlines
+│   ├── news.py               #    Recent headlines
+│   ├── price_history.py      #    2-year daily series + SMA
+│   ├── market_context.py     #    Index levels, beta cross-check
+│   ├── sec_filings.py        #    SEC EDGAR companyfacts (XBRL)
+│   └── sec_insider.py        #    SEC Form 4 insider filing activity
 │
 ├── knowledge/                # 📚 What the agent knows and how it recalls it
 │   ├── ingestion/            #    Text in:  clean → chunk → embed → store
@@ -256,35 +259,40 @@ ARA-1/
 │   ├── memory/               #    What survives across runs (episodic.py)
 │   └── reliability/          #    Source tiers, staleness, conflict detection
 │
-├── analysis/                 # 📊 Turning evidence into a thesis
-│   ├── engine.py             #    Orchestrates the 6 stages below
-│   ├── financial_engine.py   #    1. Score ~22 metrics against thresholds
-│   ├── sentiment_analyzer.py #    2. Lexicon-based news sentiment
-│   ├── misalignment_detector.py #  3. Does the story match the numbers?
-│   ├── risk_analyzer.py      #    4. Valuation, leverage, volatility risks
-│   ├── confidence_calibrator.py #  5. How much should we trust this?
-│   ├── report_generator.py   #    6. Render Markdown + PDF
-│   └── schemas.py            #    Pydantic models tying it together
+├── analysis/                 # 📊 Turning evidence into a thesis (+ grading it)
+│   ├── engine.py             #    Orchestrates the synthesis stages below
+│   ├── financial_engine.py   #    Score ~22 metrics against thresholds
+│   ├── technical_engine.py   #    Price-series signals per horizon
+│   ├── indicators.py         #    Pure pandas: SMA/EMA/RSI/MACD/ATR/…
+│   ├── sentiment_analyzer.py #    Lexicon-based news sentiment
+│   ├── misalignment_detector.py #  Does the story match the numbers?
+│   ├── risk_analyzer.py      #    Valuation, leverage, volatility risks
+│   ├── confidence_calibrator.py #  How much should we trust this?
+│   ├── report_generator.py   #    Render Markdown + PDF
+│   ├── schemas.py            #    Pydantic models tying it together
+│   ├── recommendation_store.py  # Append-only JSONL log of every call
+│   ├── outcome_scorer.py     #    Grade matured recommendations (hit rate, Brier)
+│   ├── backtester.py         #    Technical-only rolling backtest
+│   ├── score.py              #    CLI: python -m analysis.score
+│   ├── evaluation/           #    22 run-quality metrics + hallucination check
+│   └── observability/        #    Optional telemetry: collector + tracer
 │
-├── quality/                  # 🔬 Did it do a good job? Can we see how?
-│   ├── evaluation/           #    22 metrics + hallucination detection
-│   ├── observability/        #    ⚠️ built, zero instrumentation call sites
-│   └── dashboard.py          #    Read-only Streamlit monitor
-│
-├── api/server.py             # 🌐 FastAPI wrapper (POST /analyze)
-├── config/settings.py        # ⚙️  Frozen settings singleton, reads .env
-├── utils/logger.py           # 📋 Rich console + per-session file logging
+├── api/server.py             # 🌐 FastAPI — POST /analyze, /evaluate, serves webui/
+├── webui/static/             # 🖥️  Plain HTML/CSS/JS, served same-origin by FastAPI
+├── config/                   # ⚙️  settings (reads .env) · horizons · logging
 │
 ├── data/                     # 💾 Runtime state (gitignored)
 │   ├── chroma/               #    Vector database
 │   ├── episodic/             #    One JSON per past run
-│   └── evaluations/          #    Evaluation output
+│   ├── evaluations/          #    Evaluation output
+│   └── recommendations/      #    Phase 8 ground-truth log (JSONL per month)
 ├── reports/                  # 📄 Generated analysis reports
 ├── logs/                     # 📄 Per-session logs
 │
+├── tests/                    # ✅ ~180 offline tests (no network, no LLM)
 ├── CLAUDE.md                 # 🧭 Architecture notes + known defects
-├── plan.md                   # 🗺️  Roadmap (Phases 5–8)
 ├── requirements.txt
+├── Dockerfile
 └── .env.example
 ```
 
@@ -297,7 +305,7 @@ Follow the data, in this order:
 3. **`agent/graph.py`** — 3 nodes and one loop. Small file, whole control flow.
 4. **`agent/nodes.py`** — where reasoning and tool execution actually happen.
 5. **`tools/stock_price.py`** — the simplest tool; the shape all others follow.
-6. **`analysis/engine.py`** — the 6-stage synthesis pipeline.
+6. **`analysis/engine.py`** — the synthesis pipeline that turns the finished state into a thesis.
 
 > **One thing that surprises everyone:** synthesis is **not** part of the graph. The graph is only the ReAct loop. `main.py` runs it to completion, then hands the finished state to `analysis/engine.py` as a separate step.
 
@@ -441,7 +449,7 @@ Scores also decay over time — a stock price from last week is less reliable th
 | **Phase 1** | ✅ Shipped | ReAct loop, tool registry, 5-strategy JSON parser, session logging |
 | **Phase 2** | ✅ Shipped | Chroma vector store, semantic retrieval, reliability scoring, episodic memory |
 | **Phase 3** | ✅ Shipped | 6-stage deterministic synthesis DAG → BUY/HOLD/SELL thesis + Markdown/PDF reports |
-| **Phase 4** | ✅ Shipped | 22-metric evaluation, observability (telemetry + tracing), FastAPI backend, Streamlit UI |
+| **Phase 4** | ✅ Shipped | 22-metric evaluation, observability (telemetry + tracing), FastAPI backend + static web UI |
 | **Phase 5** | ✅ Shipped | Data-integrity + honest-confidence pass: D1–D12 closed, structured tool payloads (canonical units), abstain gate below 8 metrics |
 | **Phase 6** | ✅ Shipped | Short/medium/long horizons that re-weight synthesis, 2-year price series, technical engine, market-context tool, dated + falsifiable recommendations with an invalidation condition, append-only recommendation log |
 | **Phase 7** | 🔨 Partial | Real multi-source evidence: SEC EDGAR `companyfacts` tool, PDF ingestion (10-K/10-Q, no OCR), earnings-transcript ingestion, insider-transactions tool (3rd source family). The conflict-driven reroute into the financial engine (7.4) is not built |

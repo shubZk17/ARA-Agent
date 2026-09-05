@@ -54,7 +54,7 @@ _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 from config.settings import settings
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -128,7 +128,7 @@ class AnalysisRequest(BaseModel):
     llm_model: Optional[str] = Field(
         default=None, description="Model name for the chosen provider — defaults to server config"
     )
-    # `enable_failure_injection` removed — quality/evaluation/failure_injector.py
+    # `enable_failure_injection` removed — analysis/evaluation/failure_injector.py
     # was deleted 2026-08-15, so the flag advertised a capability that no
     # longer existed anywhere in the codebase.
 
@@ -301,7 +301,7 @@ async def run_analysis(request: AnalysisRequest):
         synthesis_engine = _phase3_components.get("synthesis_engine")
         if synthesis_engine:
             try:
-                from validation import record_recommendation
+                from analysis.recommendation_store import record_recommendation
                 report = synthesis_engine.synthesize(final_state, collector=collector)
                 record_recommendation(report)
                 response.report = report.model_dump(mode="json")
@@ -311,7 +311,7 @@ async def run_analysis(request: AnalysisRequest):
         # Run evaluation if requested
         if request.enable_evaluation:
             try:
-                from quality.evaluation.evaluator import SystemEvaluator
+                from analysis.evaluation.evaluator import SystemEvaluator
                 evaluator = SystemEvaluator()
                 eval_report = evaluator.evaluate(
                     agent_state=final_state,
@@ -339,7 +339,7 @@ async def run_evaluation(request: AnalysisRequest):
     """
     try:
         from main import run_agent, initialize_phase2_systems
-        from quality.evaluation.evaluator import SystemEvaluator
+        from analysis.evaluation.evaluator import SystemEvaluator
 
         # Initialize
         global _phase2_components

@@ -47,7 +47,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from config.settings import settings
-from quality.observability.collector import EventType
+from analysis.observability.collector import EventType
 from config.horizons import (
     DEFAULT_HORIZON,
     DEFAULT_RISK_PROFILE,
@@ -72,7 +72,7 @@ from analysis.schemas import (
 )
 from analysis.sentiment_analyzer import SentimentAnalyzer
 from analysis.technical_engine import TechnicalAnalysisEngine
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

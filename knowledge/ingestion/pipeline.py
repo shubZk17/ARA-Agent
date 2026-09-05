@@ -46,7 +46,7 @@ from knowledge.ingestion.loaders import (
 from knowledge.retrieval.embeddings import EmbeddingPipeline
 from knowledge.retrieval.schemas import Chunk, Document, DocumentType
 from knowledge.retrieval.vector_store import VectorStoreBase
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

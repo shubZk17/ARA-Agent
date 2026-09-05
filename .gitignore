@@ -69,8 +69,3 @@ reviews/
 .env.*
 !.env.example
 
-# Go build output (webui/) — built with `go build`, never checked in
-webui/*.exe
-webui/ara-webui
-webui/main
-

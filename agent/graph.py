@@ -64,7 +64,7 @@ from agent.nodes import (
 )
 from agent.state import AgentState
 from tools.registry import ToolRegistry
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

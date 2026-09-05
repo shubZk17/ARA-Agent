@@ -58,8 +58,8 @@ from config.horizons import (
     get_horizon_profile,
 )
 from tools.registry import ToolRegistry
-from quality.observability.collector import EventType
-from utils.logger import get_logger
+from analysis.observability.collector import EventType
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

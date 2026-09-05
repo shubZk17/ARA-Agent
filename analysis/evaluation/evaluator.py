@@ -43,7 +43,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from quality.evaluation.metrics import (
+from analysis.evaluation.metrics import (
     EvaluationReport,
     MetricResult,
     MetricStatus,
@@ -70,9 +70,9 @@ from quality.evaluation.metrics import (
     compute_risk_assessment_quality,
     compute_report_generation,
 )
-from quality.evaluation.hallucination_detector import HallucinationDetector, HallucinationReport
-from quality.evaluation.tool_efficiency import ToolEfficiencyAnalyzer, ToolEfficiencyReport
-from utils.logger import get_logger
+from analysis.evaluation.hallucination_detector import HallucinationDetector, HallucinationReport
+from analysis.evaluation.tool_efficiency import ToolEfficiencyAnalyzer, ToolEfficiencyReport
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

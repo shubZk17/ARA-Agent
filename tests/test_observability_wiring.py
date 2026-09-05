@@ -9,8 +9,8 @@ import pytest
 
 from agent import nodes
 from agent.state import create_initial_state
-from quality.observability.collector import EventType, TelemetryCollector
-from quality.observability.tracer import ExecutionTracer
+from analysis.observability.collector import EventType, TelemetryCollector
+from analysis.observability.tracer import ExecutionTracer
 from tools.base import BaseTool, ToolParameter
 
 

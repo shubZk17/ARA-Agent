@@ -1,5 +1,5 @@
 """
-analytics/indicators.py — technical indicators in plain pandas
+analysis/indicators.py — technical indicators in plain pandas
 ===============================================================
 
 WHY NOT TA-Lib:

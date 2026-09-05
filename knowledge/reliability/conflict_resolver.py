@@ -54,7 +54,7 @@ import re
 from typing import Optional
 
 from knowledge.retrieval.schemas import ConflictReport, RetrievedEvidence
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

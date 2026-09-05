@@ -11,8 +11,8 @@ import json
 import pandas as pd
 import pytest
 
-from validation.outcome_scorer import OutcomeScorer, summarize
-from validation.recommendation_store import RecommendationStore
+from analysis.outcome_scorer import OutcomeScorer, summarize
+from analysis.recommendation_store import RecommendationStore
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def test_score_due_grades_a_buy_and_writes_outcome(store, monkeypatch):
         # Everything closes at 120 — a winning BUY from an entry of 100.
         return 120.0, str(target.date())
 
-    monkeypatch.setattr("validation.outcome_scorer._fetch_close_near", fake_fetch_close_near)
+    monkeypatch.setattr("analysis.outcome_scorer._fetch_close_near", fake_fetch_close_near)
 
     scorer = OutcomeScorer(store)
     graded = scorer.score_due(as_of="2026-02-01")
@@ -80,7 +80,7 @@ def test_score_due_grades_a_losing_sell(store, monkeypatch):
     def fake_fetch_close_near(ticker, target, window_days=5):
         return 130.0, str(target.date())  # up 30% — bad for a SELL call
 
-    monkeypatch.setattr("validation.outcome_scorer._fetch_close_near", fake_fetch_close_near)
+    monkeypatch.setattr("analysis.outcome_scorer._fetch_close_near", fake_fetch_close_near)
 
     scorer = OutcomeScorer(store)
     graded = scorer.score_due(as_of="2026-02-01")
@@ -93,7 +93,7 @@ def test_hold_graded_within_band(store, monkeypatch):
     def fake_fetch_close_near(ticker, target, window_days=5):
         return 102.0, str(target.date())  # +2%, inside the 5% HOLD band
 
-    monkeypatch.setattr("validation.outcome_scorer._fetch_close_near", fake_fetch_close_near)
+    monkeypatch.setattr("analysis.outcome_scorer._fetch_close_near", fake_fetch_close_near)
 
     scorer = OutcomeScorer(store)
     graded = scorer.score_due(as_of="2026-02-01")

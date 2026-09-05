@@ -52,7 +52,7 @@ from knowledge.reliability.tiers import (
     get_tier_for_key,
     TIER_UNKNOWN,
 )
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

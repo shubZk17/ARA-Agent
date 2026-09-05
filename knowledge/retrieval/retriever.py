@@ -51,7 +51,7 @@ from typing import Any, Optional
 from knowledge.retrieval.embeddings import EmbeddingPipeline
 from knowledge.retrieval.schemas import RetrievedEvidence, SourceTier
 from knowledge.retrieval.vector_store import VectorStoreBase
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

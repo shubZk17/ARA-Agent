@@ -5,7 +5,7 @@ tests/test_empirical_calibration.py — Phase 8.4: empirical fallback baseline.
 from __future__ import annotations
 
 from analysis.confidence_calibrator import MIN_GRADED_SAMPLE, _empirical_reliability_baseline
-from validation.recommendation_store import RecommendationStore
+from analysis.recommendation_store import RecommendationStore
 
 
 def _graded_records(hit_rate: float, n: int) -> list[dict]:

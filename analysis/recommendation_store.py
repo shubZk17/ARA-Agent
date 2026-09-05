@@ -1,5 +1,5 @@
 """
-validation/recommendation_store.py — append-only log of every call made
+analysis/recommendation_store.py — append-only log of every call made
 ========================================================================
 
 WHY IT EXISTS NOW, IN PHASE 6, RATHER THAN IN PHASE 8 WHERE IT IS USED:
@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from utils.logger import get_logger
+from config.logging import get_logger
 
 logger = get_logger(__name__)
 

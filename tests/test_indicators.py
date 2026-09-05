@@ -16,7 +16,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analytics.indicators import (
+from analysis.indicators import (
     atr,
     ema,
     macd,

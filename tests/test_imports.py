@@ -22,8 +22,6 @@ MODULES = [
     "tools.base", "tools.registry", "tools.units",
     "tools.stock_price", "tools.financial_metrics", "tools.company_info", "tools.news",
     "tools.price_history", "tools.market_context",
-    # Analytics (leaf — must import with no other package loaded)
-    "analytics.indicators",
     # Knowledge
     "knowledge.retrieval.embeddings", "knowledge.retrieval.retriever",
     "knowledge.retrieval.vector_store", "knowledge.ingestion.pipeline",
@@ -32,15 +30,15 @@ MODULES = [
     "analysis.engine", "analysis.financial_engine", "analysis.confidence_calibrator",
     "analysis.risk_analyzer", "analysis.sentiment_analyzer",
     "analysis.misalignment_detector", "analysis.report_generator", "analysis.schemas",
-    "analysis.technical_engine",
-    # Phase 6 — horizons and the recommendation log
-    "config.horizons", "validation.recommendation_store",
-    # Quality
-    "quality.evaluation.evaluator", "quality.evaluation.metrics",
-    "quality.evaluation.hallucination_detector", "quality.evaluation.tool_efficiency",
-    "quality.observability.collector", "quality.observability.tracer",
+    "analysis.technical_engine", "analysis.indicators",
+    "analysis.recommendation_store", "analysis.outcome_scorer", "analysis.backtester",
+    "config.horizons",
+    # Evaluation + observability (observational, never blocks a run)
+    "analysis.evaluation.evaluator", "analysis.evaluation.metrics",
+    "analysis.evaluation.hallucination_detector", "analysis.evaluation.tool_efficiency",
+    "analysis.observability.collector", "analysis.observability.tracer",
     # Interfaces / config
-    "api.server", "config.settings", "utils.logger",
+    "api.server", "config.settings", "config.logging",
 ]
 
 
@@ -55,7 +53,7 @@ def test_deleted_modules_stay_deleted():
     If they come back, it should be LangGraph's native checkpointer instead.
     """
     for dead in ("agent.retry_handler", "agent.checkpoint_manager",
-                 "quality.evaluation.failure_injector", "quality.evaluation.benchmarks"):
+                 "analysis.evaluation.failure_injector", "analysis.evaluation.benchmarks"):
         with pytest.raises(ImportError):
             importlib.import_module(dead)
 
@@ -66,7 +64,7 @@ def test_empty_telemetry_collector_is_truthy():
     `if collector:` guard skipped telemetry export. The collector is always
     event-less today, so this was always skipped.
     """
-    from quality.observability.collector import TelemetryCollector
+    from analysis.observability.collector import TelemetryCollector
 
     collector = TelemetryCollector()
     assert len(collector) == 0

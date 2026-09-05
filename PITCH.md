@@ -49,5 +49,5 @@ The confidence score is engineered to be *hard to inflate*:
 ## 5. What's next
 
 - **Wire the 3rd source family into synthesis (Phase 7.4).** All three families now exist (`yfinance`, `sec_edgar`, `sec_edgar_ownership`), but `analysis/financial_engine.py` still only ingests yfinance-shaped data — the conflict-driven reroute is unbuilt.
-- **Close the Phase 8 gate.** Run `python -m validation.score` once the logged recommendations mature past their review dates, so empirical recalibration goes live.
+- **Close the Phase 8 gate.** Run `python -m analysis.score` once the logged recommendations mature past their review dates, so empirical recalibration goes live.
 - **Cut the ~250s analysis time.** Measured: ~93% is LLM calls, and per-iteration cost grows because `reasoning_node` resends the full observation history every loop. The fix is to digest superseded observations in the *prompt* while keeping the full trace in state for episodic memory.
